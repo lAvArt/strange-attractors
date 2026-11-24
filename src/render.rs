@@ -64,6 +64,9 @@ pub struct Renderer {
     out: (u32, u32),
     n: usize,
     len: usize,
+    /// segments at full detail (the newest), and in total once the older ones are drawn at half density
+    fresh: usize,
+    segs: usize,
     seen_steps: u64,
     seen_epoch: u32,
 }
@@ -151,6 +154,9 @@ impl Renderer {
     /// `out` is the target size in pixels, `scale` the fraction of it the scene (and its bloom) renders at.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, out: (u32, u32), scale: f32, world: &World) -> Self {
         let (n, len) = (world.trails.n, world.trails.len);
+        // level of detail: the newest 40% of a long trail at full detail, the rest at half density
+        let fresh = if len >= 200 { (len - 1) * 2 / 5 } else { len - 1 };
+        let segs = fresh + (len - 1 - fresh) / 2;
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let ring = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("ring"),
@@ -208,7 +214,7 @@ impl Renderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState { format: HDR, blend: Some(blend), write_mask: wgpu::ColorWrites::ALL })],
             }),
-            primitive: wgpu::PrimitiveState::default(),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
@@ -308,6 +314,8 @@ impl Renderer {
             out,
             n,
             len,
+            fresh,
+            segs,
             seen_steps: 0,
             seen_epoch: u32::MAX,
         }
@@ -358,7 +366,7 @@ impl Renderer {
             // line width scales with the scene height so the look is the same at any resolution
             p1: [look.width * sh / 1080.0, look.intensity, world.fade, look.age_pow],
             res: [sw, sh, 1.0 / sw, 1.0 / sh],
-            p2: [dist, 0.0, 0.0, 0.0],
+            p2: [dist, self.fresh as f32, self.segs as f32, 0.0],
         };
         self.queue.write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&frame));
         let bloom = if look.over { 0.0 } else { look.bloom };
@@ -391,7 +399,7 @@ impl Renderer {
             let mut rp = render_pass(&mut enc, &self.t.scene, wgpu::Color::TRANSPARENT);
             rp.set_pipeline(&self.pipe);
             rp.set_bind_group(0, &self.bind, &[]);
-            rp.draw(0..6, 0..(self.n * (self.len - 1)) as u32);
+            rp.draw(0..4, 0..(self.n * self.segs) as u32);
         }
         let t = &self.t;
         let fs = |enc: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, pipe: &wgpu::RenderPipeline, bg: &wgpu::BindGroup| {

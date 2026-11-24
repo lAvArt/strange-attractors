@@ -8,7 +8,7 @@ struct U {
     ids: vec4<u32>, // n trails, ring length, head slot, mode (0 additive, 1 alpha)
     p1: vec4<f32>,  // width px, intensity, fade, age power
     res: vec4<f32>, // target size px, 1/size
-    p2: vec4<f32>,  // x: reference depth (the camera distance)
+    p2: vec4<f32>,  // x: reference depth (the camera distance), y: fresh segments at full detail, z: segment count
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var<storage, read> pts: array<vec4<f32>>;
@@ -35,16 +35,25 @@ fn pal(m: f32) -> vec3<f32> {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut {
-    var cend = array<u32, 6>(0u, 0u, 1u, 1u, 0u, 1u);
-    var cside = array<f32, 6>(-1.0, 1.0, -1.0, -1.0, 1.0, 1.0);
+    // a triangle strip: (start, -), (start, +), (end, -), (end, +)
+    var cend = array<u32, 4>(0u, 0u, 1u, 1u);
+    var cside = array<f32, 4>(-1.0, 1.0, -1.0, 1.0);
     let n = u.ids.x;
     let len = u.ids.y;
     let head = u.ids.z;
-    // oldest segment first, so alpha blending stacks the newest on top
-    let s = (len - 2u) - ii / n;
+    // oldest segment first, so alpha blending stacks the newest on top. The newest `fresh` segments are single steps;
+    // the older, thinner, fainter part of the trail is drawn with segments twice as long (half the work, no visible change)
+    let fresh = u32(u.p2.y);
+    let k = (u32(u.p2.z) - 1u) - ii / n;
+    var s = k;
+    var span = 1u;
+    if (k >= fresh) {
+        s = fresh + 2u * (k - fresh);
+        span = 2u;
+    }
     let t = ii % n;
     let sa = (head + len - s) % len;
-    let sb = (head + len - s - 1u) % len;
+    let sb = (head + len - s - span) % len;
     let pa = pts[sa * n + t];
     let pb = pts[sb * n + t];
     let ca = u.vp * vec4<f32>(pa.xyz, 1.0);
@@ -65,7 +74,7 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     let e = cend[vi];
     let sd = cside[vi];
     let fl = f32(len - 1u);
-    let age_e = (f32(s) + f32(e)) / fl;
+    let age_e = (f32(s) + f32(e * span)) / fl;
     let w_end = select(ca.w, cb.w, e == 1u);
     let base = select(na, nb, e == 1u);
     let clipc = select(ca, cb, e == 1u);
@@ -76,7 +85,7 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
     o.side = sd;
 
     let sp = clamp(mix(pa.w, pb.w, 0.5) * 0.5, 0.0, 1.0);
-    let age_m = (f32(s) + 0.5) / fl;
+    let age_m = (f32(s) + 0.5 * f32(span)) / fl;
     let glint = exp(-f32(s) * 0.045);
     var col = pal(clamp(sp * 0.85 + (1.0 - age_m) * 0.15, 0.0, 1.0));
     col = mix(col, u.c2.rgb, glint * 0.6);

@@ -185,6 +185,7 @@ struct App {
     outs: Vec<Out>,
     desk: Desk,
     last: Instant,
+    last_poll: Instant,
     ticks: u32,
     mains: bool,
     frames: (u32, Instant),
@@ -217,7 +218,9 @@ impl App {
     fn setup_gfx(&mut self, i: usize) {
         let (w, h, scale) = {
             let o = &self.outs[i];
-            (o.size.0 * o.scale as u32, o.size.1 * o.scale as u32, o.scale)
+            // logical pixels unless `hidpi`: the compositor scales a 1x buffer up, and the fill cost is a quarter on a 2x panel
+            let k = if self.cfg.hidpi { o.scale } else { 1 };
+            (o.size.0 * k as u32, o.size.1 * k as u32, k)
         };
         if w == 0 || h == 0 {
             return;
@@ -284,6 +287,9 @@ impl App {
         let fps = if self.mains { self.cfg.fps } else { self.cfg.fps.min(20.0) }.clamp(5.0, 120.0);
         let interval = Duration::from_secs_f32(1.0 / fps);
         let now = Instant::now();
+        // the theme is watched even while nothing is drawn, so the first frame back is already in the right colours
+        self.world.poll_theme(now.duration_since(self.last_poll).as_secs_f32());
+        self.last_poll = now;
         if !self.outs.iter().any(|o| o.gfx.is_some() && self.visible(&o.name)) {
             // nothing to show: keep time frozen and check back twice a second
             self.last = now;
@@ -416,6 +422,7 @@ pub fn run(cfg: Config, seed: u64) {
         outs: Vec::new(),
         desk: Desk::default(),
         last: now,
+        last_poll: now,
         ticks: 0,
         mains: true,
         frames: (0, now),

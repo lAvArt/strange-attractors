@@ -21,6 +21,12 @@ const STEPS_PER_SEC: f32 = 100.0;
 pub struct World {
     pub cfg: Config,
     pub look: Look,
+    /// a running crossfade between two looks (a theme change), 1 = finished
+    from_look: Look,
+    target_look: Look,
+    blend: f32,
+    theme_stamp: String,
+    theme_poll: f32,
     pub trails: Trails,
     pub logo: Option<Logo>,
     pub t: f32,
@@ -44,7 +50,35 @@ impl World {
         let order: Vec<usize> = (0..systems::ALL.len()).map(|i| (first + i) % systems::ALL.len()).collect();
         let look = Look::resolve(cfg);
         let trails = Trails::new(systems::ALL[order[0]], cfg.trails, cfg.length, seed, true);
-        World { cfg: cfg.clone(), look, trails, logo: logo::load(&cfg.logo), t: 0.0, fade: 1.0, epoch: 0, order, idx: 0, since: 0.0, phase: Phase::Run, acc: 0.0, seed, cycling }
+        World { cfg: cfg.clone(), from_look: look.clone(), target_look: look.clone(), blend: 1.0, theme_stamp: crate::config::theme_stamp(), theme_poll: 0.0, look, trails, logo: logo::load(&cfg.logo), t: 0.0, fade: 1.0, epoch: 0, order, idx: 0, since: 0.0, phase: Phase::Run, acc: 0.0, seed, cycling }
+    }
+
+    /// With the `theme` look, notice when the system theme changes (checked once a second, a single stat call) and
+    /// crossfade to the new colours over a moment. Call it on every tick, even while nothing is drawn.
+    pub fn poll_theme(&mut self, dt: f32) {
+        if self.cfg.preset != "theme" {
+            return;
+        }
+        if self.blend < 1.0 {
+            self.blend = (self.blend + dt / 1.6).min(1.0);
+            let t = self.blend * self.blend * (3.0 - 2.0 * self.blend);
+            self.look = Look::lerp(&self.from_look, &self.target_look, t);
+        }
+        self.theme_poll += dt;
+        if self.theme_poll < 1.0 {
+            return;
+        }
+        self.theme_poll = 0.0;
+        let stamp = crate::config::theme_stamp();
+        if stamp != self.theme_stamp {
+            self.theme_stamp = stamp;
+            self.from_look = self.look.clone();
+            self.target_look = Look::resolve(&self.cfg);
+            self.blend = 0.0;
+            if crate::gpu::debug() {
+                eprintln!("attractor: theme changed, blending to the new colours");
+            }
+        }
     }
 
     pub fn system_name(&self) -> &'static str {

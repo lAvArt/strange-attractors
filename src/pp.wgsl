@@ -117,11 +117,11 @@ fn fs_comp(i: FOut) -> @location(0) vec4<f32> {
         // premultiplied: the light's own brightness is its opacity
         if (overlay) { a = clamp(max(max(c.r, c.g), c.b), 0.0, 1.0); }
     }
-    // dither by one 8-bit sRGB step (their size in linear light grows with brightness), per channel so it stays neutral
-    let q = i.pos.xy + vec2<f32>(p.v.w * 61.0, 0.0);
-    let nz = vec3<f32>(hash12(q), hash12(q + vec2<f32>(17.3, 5.1)), hash12(q + vec2<f32>(91.7, 33.9))) - vec3<f32>(0.5);
-    let step = (1.0 / 255.0) * 2.3 * pow(max(c, vec3<f32>(0.0)) + vec3<f32>(0.003), vec3<f32>(0.545));
-    c = max(c + nz * step * 1.3, vec3<f32>(0.0));
+    // dither by about one 8-bit sRGB step (their size in linear light grows with brightness); one noise value for all
+    // channels keeps it neutral and is cheap enough for a full-resolution pass
+    let nz = hash12(i.pos.xy + vec2<f32>(p.v.w * 61.0, 0.0)) - 0.5;
+    let step = (1.0 / 255.0) * 2.4 * sqrt(max(c, vec3<f32>(0.0)) + vec3<f32>(0.004));
+    c = max(c + step * (nz * 1.3), vec3<f32>(0.0));
     if (overlay) { a = max(a, max(max(c.r, c.g), c.b)); }
     return vec4<f32>(c, a);
 }

@@ -47,3 +47,56 @@ pub fn run(cfg: &Config, mode: Mode, path: &str, size: (u32, u32), secs: f32, se
     image::save_buffer(path, &px, size.0, size.1, image::ColorType::Rgba8).expect("save png");
     println!("{} ({}) -> {}", world.system_name(), cfg.preset, path);
 }
+
+/// `--bench N`: render N frames offscreen as fast as the GPU goes and report the time per frame.
+pub fn bench(cfg: &Config, mode: Mode, size: (u32, u32), frames: u32, seed: u64) {
+    let instance = gpu::instance();
+    let adapter = gpu::adapter(&instance, None, cfg);
+    let (device, queue) = gpu::device(&adapter);
+    let mut world = World::new(cfg, seed);
+    let format = wgpu::TextureFormat::Bgra8UnormSrgb;
+    let scale = gpu::render_scale(cfg, mode, size.0, size.1);
+    let mut r = Renderer::new(&device, &queue, format, size, scale, &world);
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("bench"),
+        size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let wait = || {
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    };
+    for _ in 0..10 {
+        world.update(1.0 / 30.0);
+        r.draw(&world, &view);
+    }
+    wait();
+    let (mut cpu_sim, mut total) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
+    for _ in 0..frames {
+        let t0 = std::time::Instant::now();
+        world.update(1.0 / 30.0);
+        cpu_sim += t0.elapsed();
+        r.draw(&world, &view);
+        wait();
+        total += t0.elapsed();
+    }
+    let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0 / frames as f64;
+    println!(
+        "{:>9} {:>9} {}x{} @{:.0}%  {:>6.2} ms/frame  (sim {:.2} ms, gpu+submit {:.2} ms)  -> {} trails x {} points",
+        world.system_name(),
+        cfg.preset,
+        size.0,
+        size.1,
+        scale * 100.0,
+        ms(total),
+        ms(cpu_sim),
+        ms(total) - ms(cpu_sim),
+        cfg.trails,
+        cfg.length
+    );
+}

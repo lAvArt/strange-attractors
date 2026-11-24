@@ -15,7 +15,8 @@ and the next is born from a single point and grows into its shape.
   30 fps (20 on battery) and **pauses itself** when it cannot be seen: a fullscreen window, a locked session, or a
   sleeping monitor.
 - **Screensaver** (`attractor`): a fullscreen window using Omarchy's screensaver class, so the idle service still locks on
-  time and any key, click or mouse movement dismisses it. Like Gridfall it stays on the integrated GPU by default.
+  time; any key, click or mouse movement dismisses it, and so does losing focus (a workspace switch), so a saver nobody can
+  see never lingers. Like Gridfall it stays on the integrated GPU by default.
 
 The plugin service starts the wallpaper at login and the screensaver after the system idle timeout
 (`idle.screensaver` in `shell.json`).
@@ -31,15 +32,15 @@ cargo build --release --locked --target-dir ~/.cache/attractor/build \
 omarchy plugin enable io.github.lavart.attractor
 ```
 
-Try it without the plugin: `attractor --windowed`, `attractor --keep` (a screensaver that ignores input), `attractor --wallpaper`, or render a still with
+Try it without the plugin: `attractor --bench 300`, `attractor --windowed`, `attractor --keep` (a screensaver that ignores input), `attractor --wallpaper`, or render a still with
 `attractor --shot out.png --system lorenz --size 1920x1080 --secs 30`.
 
 ## Looks
 
 | preset | |
 |---|---|
-| `theme` (default) | glowing light in the active Omarchy theme: its accent as the light, its background as the ground |
-| `matte` | the same theme colours as flat, matte lines: no glow, no additive white-out |
+| `theme` (default) | **follows the system theme**: its ground, hairlines in its foreground, its accent on the fastest strands. Dark themes get light lines, light themes dark ink. Switch theme and it crossfades to the new colours, no restart |
+| `matte` | flat lines in the theme's accent on its dark ground |
 | `pale` | pale brushed-metal ribbons on white paper, after the *Strange Attractors* poster series |
 | `graphite` | dark grey shades, charcoal to soft grey, on the same pale studio ground |
 | `neon` | violet to cyan to pink light on near-black |
@@ -48,6 +49,27 @@ Try it without the plugin: `attractor --windowed`, `attractor --keep` (a screens
 | `ink` | stark dark ink on white paper |
 
 ![Presets](docs/media/presets.jpg)
+
+## Following the theme
+
+The default look reads the active Omarchy theme (`colors.toml`) and watches it, with a single `stat` once a second. When the
+theme changes, the ground and the lines crossfade to the new palette over a moment, in the wallpaper and the screensaver
+alike, even while a fullscreen window has paused the drawing. Nothing needs restarting.
+
+## Performance
+
+Measured offscreen on an Iris Xe (`attractor --bench 300 [--wallpaper] [--size WxH]`), GPU milliseconds per frame:
+
+| | per frame |
+|---|---|
+| wallpaper, 1600x1000 (the default: a 2x panel's logical size) | 1.6 ms, about 5% of the GPU at 30 fps |
+| wallpaper, native 3200x2000 (`"hidpi": true`) | 2.2 ms |
+| screensaver, 3200x2000 | 3.3 ms at 60 fps |
+
+How: the wallpaper renders at the monitor's *logical* resolution and lets the compositor scale it, since the final
+full-resolution pass is memory-bandwidth bound; ribbons are single triangle strips; the older half of every trail is drawn
+at half density; the dither is one cheap hash; and nothing is drawn at all while the wallpaper is hidden. Live, the
+service's wallpaper uses about 1% of one core and 28 MB.
 
 ## Your logo
 
@@ -99,6 +121,7 @@ must be converted to paths. Only the shapes and their opacity matter unless you 
 | `cycle` | 150 / 90 | seconds on each attractor (wallpaper / screensaver) |
 | `saver` | `auto` | `on`, `off`, or `auto`: on unless Gridfall is enabled, so two screensavers never race on idle |
 | `wallpaper` | `true` | run the live wallpaper |
+| `hidpi` | `false` | wallpaper only: render at the monitor's native pixels instead of logical ones (crisper, ~1.4x the cost on a 2x panel) |
 | `overlay` | `false` | wallpaper only: draw the trails with transparency over the desktop wallpaper instead of on their own ground |
 | `fps`, `speed`, `trails`, `length`, `width`, `zoom`, `intensity`, `bloom`, `render_scale` | per mode | look and cost |
 | `gpu` | `low` | `high` uses the discrete GPU; leave it on `low` on hybrid laptops |

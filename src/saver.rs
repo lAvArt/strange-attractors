@@ -79,6 +79,7 @@ impl App {
         let now = Instant::now();
         let dt = now.duration_since(self.last).as_secs_f32();
         self.last = now;
+        self.world.poll_theme(dt);
         self.world.update(dt);
         let Some(g) = self.gfx.as_mut() else { return };
         let frame = match g.surface.get_current_texture() {
@@ -131,6 +132,9 @@ impl ApplicationHandler for App {
         let live = !self.windowed && !self.keep && Instant::now() > self.grace_until;
         match ev {
             WindowEvent::CloseRequested => el.exit(),
+            // hidden or pushed behind (a workspace switch, another window taking focus): a saver nobody can see or
+            // dismiss would otherwise stay up, burning power and blocking the next idle launch
+            WindowEvent::Focused(false) if live => el.exit(),
             WindowEvent::Resized(s) => {
                 if let Some(g) = self.gfx.as_mut() {
                     g.resize(s.width, s.height);

@@ -42,6 +42,11 @@ fn main() {
     gpu::prepare_env(&cfg);
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(7);
 
+    if let Some(n) = arg(&args, "--bench").and_then(|v| v.parse::<u32>().ok()) {
+        let size = arg(&args, "--size").and_then(|v| v.split_once('x')).and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))).unwrap_or((3200, 2000));
+        shot::bench(&cfg, mode, size, n, seed);
+        return;
+    }
     if let Some(path) = arg(&args, "--shot") {
         let size = arg(&args, "--size").and_then(|v| v.split_once('x')).and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))).unwrap_or((1920, 1080));
         let secs = arg(&args, "--secs").and_then(|v| v.parse().ok()).unwrap_or(30.0);

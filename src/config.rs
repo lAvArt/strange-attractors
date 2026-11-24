@@ -41,6 +41,8 @@ pub struct Config {
     /// slides the attractor sideways (and up) in screen space, in units of half the screen: `None` makes room for a logo
     pub shift_x: Option<f32>,
     pub shift_y: f32,
+    /// wallpaper only: render at the monitor's native pixels instead of logical ones (crisper, costs ~4x the fill on a 2x panel)
+    pub hidpi: bool,
 }
 
 pub fn home() -> String {
@@ -74,6 +76,7 @@ impl Config {
             logo_opacity: 0.6,
             shift_x: None,
             shift_y: 0.0,
+            hidpi: false,
         };
         let path = std::env::var("ATTRACTOR_CONFIG").unwrap_or_else(|_| format!("{}/.config/attractor/config.json", home()));
         if let Some(v) = std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) {
@@ -104,6 +107,7 @@ impl Config {
             if let Some(x) = f("logo_x") { c.logo_x = x }
             if let Some(x) = f("logo_y") { c.logo_y = x }
             if let Some(x) = f("logo_opacity") { c.logo_opacity = x }
+            if let Some(x) = get("hidpi").and_then(|x| x.as_bool()) { c.hidpi = x }
             if let Some(x) = get("overlay").and_then(|x| x.as_bool()) { c.overlay = x }
         }
         let e = |k: &str| std::env::var(k).ok();
@@ -165,29 +169,81 @@ fn theme_colors() -> Option<Vec<(String, String)>> {
     )
 }
 
+/// identifies the current theme file: its resolved path and modification time, so a theme switch (a new symlink
+/// target) or an edit is noticed
+pub fn theme_stamp() -> String {
+    let p = std::env::var("ATTRACTOR_THEME").unwrap_or_else(|_| format!("{}/.local/state/omarchy/current/theme/colors.toml", home()));
+    let canon = std::fs::canonicalize(&p).map(|c| c.display().to_string()).unwrap_or_default();
+    let mtime = std::fs::metadata(&p).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
+    format!("{canon}:{mtime}")
+}
+
 impl Look {
+    /// the look `t` of the way from `a` to `b` (colours and numbers blend; `b` decides how it composites)
+    pub fn lerp(a: &Look, b: &Look, t: f32) -> Look {
+        let f = |x: f32, y: f32| x + (y - x) * t;
+        let c3 = |x: [f32; 3], y: [f32; 3]| mix(x, y, t);
+        Look {
+            bg_top: c3(a.bg_top, b.bg_top),
+            bg_bot: c3(a.bg_bot, b.bg_bot),
+            c: [c3(a.c[0], b.c[0]), c3(a.c[1], b.c[1]), c3(a.c[2], b.c[2])],
+            over: b.over,
+            bloom: f(a.bloom, b.bloom),
+            width: f(a.width, b.width),
+            intensity: f(a.intensity, b.intensity),
+            vignette: f(a.vignette, b.vignette),
+            exposure: f(a.exposure, b.exposure),
+            age_pow: f(a.age_pow, b.age_pow),
+            logo_tint: match (a.logo_tint, b.logo_tint) {
+                (Some(x), Some(y)) => Some(c3(x, y)),
+                _ => b.logo_tint,
+            },
+        }
+    }
+
     pub fn resolve(cfg: &Config) -> Look {
         let mut l = match cfg.preset.as_str() {
-            // the colours of the active Omarchy theme: its accent as the light, its background as the ground
+            // follows the system theme: its ground, its foreground for the lines, its accent for the leading heads.
+            // Dark themes get light lines on their dark ground, light themes dark lines on paper; never a glow.
             "theme" => {
                 let th = theme_colors().unwrap_or_default();
                 let g = |k: &str, d: &str| th.iter().find(|(a, _)| a == k).map(|(_, v)| v.clone()).unwrap_or_else(|| d.to_string());
-                let bg = hex(&g("background", "#101014"));
-                let dark = hex(&g("darker_background", "#08080a"));
+                let bg = hex(&g("background", "#121212"));
+                let fg = hex(&g("foreground", "#bebebe"));
                 let accent = hex(&g("accent", "#e68e0d"));
-                let bright = hex(&g("bright_foreground", "#eaeaea"));
-                Look {
-                    bg_top: bg,
-                    bg_bot: dark,
-                    c: [mix(accent, [0.0; 3], 0.7), accent, mix(accent, bright, 0.4)],
-                    over: false,
-                    bloom: 0.9,
-                    width: 2.2,
-                    intensity: 0.6,
-                    vignette: 0.55,
-                    exposure: 1.2,
-                    age_pow: 1.5,
-                    logo_tint: None,
+                let lum = |c: [f32; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+                let light = g("mode", "dark") == "light" || lum(bg) > 0.4;
+                if light {
+                    let darker = hex(&g("darker_background", "#d8d8d8"));
+                    Look {
+                        bg_top: bg,
+                        bg_bot: mix(bg, darker, 0.6),
+                        c: [mix(fg, bg, 0.6), mix(fg, bg, 0.12), mix(accent, fg, 0.3)],
+                        over: true,
+                        bloom: 0.0,
+                        width: 1.7,
+                        intensity: 0.92,
+                        vignette: 0.10,
+                        exposure: 1.0,
+                        age_pow: 0.8,
+                        logo_tint: None,
+                    }
+                } else {
+                    let lighter = hex(&g("lighter_background", "#1e1e1e"));
+                    let darker = hex(&g("darker_background", "#0a0a0a"));
+                    Look {
+                        bg_top: mix(bg, lighter, 0.55),
+                        bg_bot: darker,
+                        c: [mix(fg, bg, 0.72), mix(fg, bg, 0.22), accent],
+                        over: true,
+                        bloom: 0.0,
+                        width: 1.5,
+                        intensity: 0.9,
+                        vignette: 0.22,
+                        exposure: 1.0,
+                        age_pow: 0.85,
+                        logo_tint: None,
+                    }
                 }
             }
             // flat, matte lines in the theme's accent on its background: no glow, no additive white-out
