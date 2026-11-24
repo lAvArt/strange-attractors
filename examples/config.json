@@ -1,11 +1,13 @@
 {
   "preset": "theme",
+  "palette": "auto",
   "system": "cycle",
   "saver": "auto",
   "wallpaper": true,
+  "annotations": true,
   "gpu": "low",
 
-  "logo": "twinise",
+  "logo": "none",
   "logo_style": "both",
   "logo_color": "auto",
   "logo_size": 0.56,
@@ -13,6 +15,6 @@
   "logo_y": 0.52,
   "logo_opacity": 0.6,
 
-  "wallpaper_options": { "fps": 30, "speed": 0.7, "overlay": false },
-  "saver_options": { "preset": "neon", "fps": 60, "trails": 384, "length": 640 }
+  "wallpaper_options": { "fps": 30, "speed": 0.7, "hidpi": true },
+  "saver_options": { "preset": "dust", "fps": 60 }
 }
