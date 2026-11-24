@@ -1,0 +1,61 @@
+#!/bin/bash
+# Start the Attractor screensaver on every monitor (one fullscreen window each), unless a screensaver is already
+# up or the session is locked. Run by the plugin service on idle; also fine to bind to a key for a preview.
+# Extra arguments go to attractor itself, e.g. `attractor-launch --system aizawa --preset neon`.
+set -u
+
+count() { hyprctl clients -j 2>/dev/null | jq '[.[] | select(.class == "org.omarchy.screensaver")] | length' 2>/dev/null || echo 0; }
+# any screensaver counts (this one, Gridfall, Omarchy's own): never stack two
+(($(count) > 0)) && exit 0
+[[ $(omarchy-shell lock isLocked 2>/dev/null) == "true" ]] && exit 0
+
+root="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+bin=""
+build="${XDG_CACHE_HOME:-$HOME/.cache}/attractor/build/release/attractor"
+for c in "$build" "$HOME/.cargo/bin/attractor" "$HOME/.local/bin/attractor" "$root/target/release/attractor" "$(command -v attractor 2>/dev/null)"; do
+  if [[ -n "$c" && -x "$c" ]]; then
+    bin="$c"
+    break
+  fi
+done
+if [[ -z "$bin" ]]; then
+  notify-send -u normal "Attractor" "Not built yet. See the Installing section of $root/README.md" 2>/dev/null
+  exit 1
+fi
+
+focus_monitor() {
+  hyprctl dispatch "hl.dsp.focus({ monitor = \"$1\" })" >/dev/null 2>&1 || hyprctl dispatch focusmonitor "$1" >/dev/null 2>&1
+}
+# Omarchy's window rules park org.omarchy.screensaver on a silent special workspace, where it stays invisible.
+# Like omarchy-launch-screensaver, name the monitor's own special workspace in the exec rule so the window shows.
+hypr_exec() {
+  local cmd ws="$WS"
+  printf -v cmd '%q ' "$@"
+  if [[ -n "$ws" ]]; then
+    hyprctl dispatch "hl.dsp.exec_cmd([[[workspace $ws] $cmd]])" >/dev/null 2>&1 ||
+      hyprctl dispatch exec -- "[workspace $ws] $cmd" >/dev/null 2>&1
+  else
+    hyprctl dispatch "hl.dsp.exec_cmd([[$cmd]])" >/dev/null 2>&1 || hyprctl dispatch exec -- "$cmd" >/dev/null 2>&1
+  fi
+}
+
+focused=$(hyprctl monitors -j 2>/dev/null | jq -r '.[] | select(.focused) | .name' 2>/dev/null)
+monitors=$(hyprctl monitors -j 2>/dev/null | jq -r '.[] | "\(.name) \(.specialWorkspace.name)"' 2>/dev/null)
+if [[ -z "$monitors" ]]; then
+  "$bin" "$@" >/dev/null 2>&1 &
+  exit 0
+fi
+while read -r m special; do
+  [[ -z "$m" ]] && continue
+  WS=${special:-special:screensaver-$m}
+  n0=$(count)
+  focus_monitor "$m"
+  hypr_exec "$bin" "$@"
+  # let this monitor's window open before moving focus on
+  for _ in $(seq 30); do
+    sleep 0.1
+    (($(count) > n0)) && break
+  done
+done <<<"$monitors"
+[[ -n "$focused" ]] && focus_monitor "$focused"
+exit 0

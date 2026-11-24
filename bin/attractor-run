@@ -1,0 +1,31 @@
+#!/bin/bash
+# Run the attractor binary (wherever it was built), as the one and only live wallpaper when given --wallpaper.
+# Used by the plugin service; handy by hand too: `attractor-run --wallpaper`, `attractor-run --windowed`.
+set -u
+root="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+bin=""
+build="${XDG_CACHE_HOME:-$HOME/.cache}/attractor/build/release/attractor"
+for c in "$build" "$HOME/.cargo/bin/attractor" "$HOME/.local/bin/attractor" "$root/target/release/attractor" "$(command -v attractor 2>/dev/null)"; do
+  if [[ -n "$c" && -x "$c" ]]; then
+    bin="$c"
+    break
+  fi
+done
+if [[ -z "$bin" ]]; then
+  notify-send -u normal "Attractor" "Not built yet. See the Installing section of $root/README.md" 2>/dev/null
+  exit 1
+fi
+
+if [[ "${1:-}" == "--wallpaper" ]]; then
+  # one wallpaper at a time: a restarted shell may have left the previous one behind
+  pidfile="${XDG_RUNTIME_DIR:-/tmp}/attractor-wallpaper.pid"
+  if [[ -f "$pidfile" ]]; then
+    old=$(<"$pidfile")
+    if [[ -n "$old" && "$(tr '\0' ' ' <"/proc/$old/cmdline" 2>/dev/null)" == *attractor*--wallpaper* ]]; then
+      kill "$old" 2>/dev/null
+      sleep 0.3
+    fi
+  fi
+  echo $$ >"$pidfile"
+fi
+exec "$bin" "$@"

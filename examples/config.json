@@ -1,0 +1,9 @@
+{
+  "preset": "theme",
+  "system": "cycle",
+  "saver": "auto",
+  "wallpaper": true,
+  "gpu": "low",
+  "wallpaper_options": { "fps": 30, "speed": 0.7, "overlay": false },
+  "saver_options": { "preset": "neon", "fps": 60, "trails": 384, "length": 640 }
+}
