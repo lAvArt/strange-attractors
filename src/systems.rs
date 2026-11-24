@@ -171,7 +171,7 @@ fn eigen(mut a: [[f64; 3]; 3]) -> ([Vec3; 3], Vec3) {
 }
 
 /// The scale at which a cloud of points (in the form's own frame, centred) fills the picture without leaving it:
-/// the camera's own path is tried (it leans up to 45 degrees off the face-on axis, in every direction) and the form,
+/// the camera's own path is tried (a full orbit of the form's axis at each of its leans) and the form,
 /// at its most awkward, must still stand within 80% of the screen's height and 68% of its width (which also keeps
 /// the margins free for the annotations).
 pub fn fit(local: &[Vec3]) -> f64 {
@@ -180,11 +180,11 @@ pub fn fit(local: &[Vec3]) -> f64 {
     let mut worst = |r: f64| {
         let (dist, p11, aspect) = (4.1, 1.0 / (19f64.to_radians()).tan(), 1.6);
         let mut most: f64 = 0.0;
-        for lean in [0.30f64, 0.54, 0.78] {
+        for lean in [0.42f64, 0.62, 0.82] {
             for k in 0..8 {
                 let a = k as f64 * std::f64::consts::FRAC_PI_4;
                 let e = [lean.sin() * a.cos(), lean.sin() * a.sin(), lean.cos()];
-                let rt = unit3(cross3([-e[0], -e[1], -e[2]], [0.0, 1.0, 0.0]));
+                let rt = unit3(cross3([-e[0], -e[1], -e[2]], [0.0, 0.0, 1.0]));
                 let u = cross3(rt, [-e[0], -e[1], -e[2]]);
                 buf.clear();
                 buf.extend(local.iter().step_by(stride).map(|q| {
@@ -274,4 +274,51 @@ pub fn calibrate(s: &System) -> Calib {
     let dt = (STEP_LEN * radius / mean_speed).clamp(s.dt0 * 0.25, s.dt0 * 3.0);
     let orbit = (0..512).map(|i| pts[i * (n / 512)]).collect();
     Calib { center: c, radius, basis: [right, up, normal], dt, mean_speed, orbit }
+}
+
+/// The system's equilibria near its attractor (the points where the flow stands still: the eyes of the Lorenz wings,
+/// the saddle between them), found by Newton's method from points of the orbit.
+pub fn equilibria(s: &System, cal: &Calib) -> Vec<Vec3> {
+    let mut found: Vec<Vec3> = Vec::new();
+    let seeds = cal.orbit.iter().step_by(11).copied().chain([cal.center, [0.0, 0.0, 0.0]]);
+    for seed in seeds {
+        let mut x = seed;
+        for _ in 0..60 {
+            let f0 = (s.f)(x);
+            // the Jacobian by differences, column by column
+            let h = 1e-6 * cal.radius;
+            let mut j = [[0.0; 3]; 3];
+            for c in 0..3 {
+                let mut xp = x;
+                xp[c] += h;
+                let fp = (s.f)(xp);
+                for r in 0..3 {
+                    j[r][c] = (fp[r] - f0[r]) / h;
+                }
+            }
+            let det = j[0][0] * (j[1][1] * j[2][2] - j[1][2] * j[2][1]) - j[0][1] * (j[1][0] * j[2][2] - j[1][2] * j[2][0]) + j[0][2] * (j[1][0] * j[2][1] - j[1][1] * j[2][0]);
+            if det.abs() < 1e-14 {
+                break;
+            }
+            // solve J d = f0 by Cramer's rule
+            let col = |k: usize| {
+                let mut m = j;
+                for r in 0..3 {
+                    m[r][k] = f0[r];
+                }
+                (m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])) / det
+            };
+            let d = [col(0), col(1), col(2)];
+            // damped, so a step never leaves the neighbourhood
+            let dl = dot3(d, d).sqrt();
+            let k = (cal.radius * 0.5 / dl.max(1e-300)).min(1.0);
+            x = [x[0] - d[0] * k, x[1] - d[1] * k, x[2] - d[2] * k];
+        }
+        let f1 = (s.f)(x);
+        let off = [x[0] - cal.center[0], x[1] - cal.center[1], x[2] - cal.center[2]];
+        if x.iter().all(|v| v.is_finite()) && dot3(f1, f1).sqrt() < 1e-7 * cal.mean_speed && dot3(off, off).sqrt() < 1.6 * cal.radius && !found.iter().any(|q| { let e = [q[0] - x[0], q[1] - x[1], q[2] - x[2]]; dot3(e, e).sqrt() < 1e-3 * cal.radius }) {
+            found.push(x);
+        }
+    }
+    found
 }

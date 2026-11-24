@@ -76,7 +76,11 @@ impl Annot {
                 rows[(y * atlas_w + x) as usize] = 255;
             }
         }
-        let (mut cx, mut cy, mut rowh) = (6u32, 0u32, 4u32);
+        // and beside it a hairline's cross-section (nothing, ink, nothing), which the sampler turns into a smooth edge
+        for xx in 8..12 {
+            rows[(atlas_w + xx) as usize] = 255;
+        }
+        let (mut cx, mut cy, mut rowh) = (16u32, 0u32, 4u32);
         let mut glyphs = HashMap::new();
         for (si, &size) in px.iter().enumerate() {
             for ch in CHARSET.chars() {
@@ -123,6 +127,80 @@ impl Annot {
     fn rect(&self, v: &mut Vec<TextVertex>, x: f32, y: f32, w: f32, h: f32, col: [f32; 4]) {
         let (u, t) = (2.0 / self.atlas_w as f32, 2.0 / self.atlas_h as f32);
         self.quad(v, x.round(), y.round(), w.round().max(1.0), h.round().max(1.0), [u, t, u, t], col);
+    }
+
+    /// a hairline from one point to another, about `width` pixels wide, with smooth edges at any angle
+    fn line(&self, v: &mut Vec<TextVertex>, a: [f32; 2], b: [f32; 2], width: f32, col: [f32; 4]) {
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let l = (dx * dx + dy * dy).sqrt();
+        if l < 1e-3 {
+            return;
+        }
+        let (nx, ny) = (-dy / l * width, dx / l * width);
+        let (u, v0, v1) = (10.0 / self.atlas_w as f32, 0.5 / self.atlas_h as f32, 2.5 / self.atlas_h as f32);
+        let p = |x: f32, y: f32, t: f32| TextVertex { pos: [x, y], uv: [u, t], col };
+        let (q0, q1, q2, q3) = (p(a[0] - nx, a[1] - ny, v0), p(a[0] + nx, a[1] + ny, v1), p(b[0] - nx, b[1] - ny, v0), p(b[0] + nx, b[1] + ny, v1));
+        v.extend_from_slice(&[q0, q1, q2, q2, q1, q3]);
+    }
+
+    /// The tracking boxes: corner brackets around the points the world is following, each with its name and what it
+    /// reads, and faint lines from one box to the next. Laid out every frame (the boxes move); the labels themselves
+    /// change only a few times a second.
+    pub fn trackers(&self, world: &World, size: (f32, f32)) -> Vec<TextVertex> {
+        let mut v = Vec::new();
+        if world.trackers.is_empty() {
+            return v;
+        }
+        let (w, h) = size;
+        let look = &world.look;
+        let (view, proj, _) = world.camera(w / h);
+        let vp = proj * view;
+        let k = h / 2000.0;
+        let c = |rgb: [f32; 3], a: f32| [rgb[0], rgb[1], rgb[2], a];
+        // where each box stands on the screen, and how visible it is: boxes keep out of the margins, where the text is
+        let spots: Vec<([f32; 2], f32, &crate::world::Tracker)> = world
+            .trackers
+            .iter()
+            .map(|t| {
+                let cp = vp * t.pos.extend(1.0);
+                if cp.w < 0.2 {
+                    return ([0.0, 0.0], 0.0, t);
+                }
+                let (x, y) = ((cp.x / cp.w * 0.5 + 0.5) * w, (0.5 - cp.y / cp.w * 0.5) * h);
+                let edge = ((x - w * 0.14) / (w * 0.06)).min((w * 0.86 - x) / (w * 0.06)).min((y - h * 0.09) / (h * 0.05)).min((h * 0.91 - y) / (h * 0.05)).clamp(0.0, 1.0);
+                ([x, y], t.alpha * edge, t)
+            })
+            .collect();
+        // lines first, under the boxes: from each box to the next one that is there
+        for i in 0..spots.len() {
+            let (a, aa, _) = spots[i];
+            let (b, ab, _) = spots[(i + 1) % spots.len()];
+            let s = aa.min(ab);
+            if s > 0.01 && spots.len() > 1 {
+                self.line(&mut v, a, b, 1.1 * k.max(0.6), c(look.text, 0.20 * s));
+            }
+        }
+        for (p, a, t) in &spots {
+            if *a <= 0.01 {
+                continue;
+            }
+            let half = (19.0 * t.size * k).round();
+            let arm = (half * 0.42).round().max(2.0);
+            let lw = k.round().max(1.0);
+            let (x, y) = (p[0].round(), p[1].round());
+            let col = c(look.text_hi, 0.42 * a);
+            for (sx, sy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                let (cx, cy) = (x + sx * half, y + sy * half);
+                self.rect(&mut v, if sx < 0.0 { cx } else { cx - arm }, if sy < 0.0 { cy } else { cy - lw }, arm, lw, col);
+                self.rect(&mut v, if sx < 0.0 { cx } else { cx - lw }, if sy < 0.0 { cy } else { cy - arm }, lw, arm, col);
+            }
+            // a dot at the point itself
+            self.rect(&mut v, x - lw, y - lw, 2.0 * lw, 2.0 * lw, c(look.text_hi, 0.5 * a));
+            let tx = x + half + self.adv[0] * 0.6;
+            self.text(&mut v, &t.tag, 0, tx, y - half + self.px[0] * 0.72, false, 0.1, c(look.text_hi, 0.5 * a));
+            self.text(&mut v, &t.label.replace('-', "−"), 0, tx, y - half + self.px[0] * 0.72 + (self.px[0] * 1.45).round(), false, 0.0, c(look.text, 0.46 * a));
+        }
+        v
     }
 
     /// text with its baseline at `y`, starting at `x` (or ending there, if `right`); `track` adds letter-spacing
@@ -210,7 +288,7 @@ impl Annot {
         for i in 0..count {
             let on = i == idx;
             let xx = x1 - arm - (count - i) as f32 * gap + gap - d;
-            self.rect(&mut v, xx, ty - d, d, d, if on { c(look.text_hi, 0.95 * f.max(0.3)) } else { c(look.text, 0.36) });
+            self.rect(&mut v, xx, ty - d, d, d, if on { c(look.accent, 0.95 * f.max(0.3)) } else { c(look.text, 0.36) });
         }
         let mut y = ty + lh * 1.25;
         let groups = tr.n / tr.m.max(1);

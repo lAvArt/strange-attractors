@@ -6,6 +6,27 @@ use crate::systems;
 use crate::trails::Trails;
 use glam::{Mat4, Vec3, Vec4};
 
+/// A tracking box: it locks onto a point of the form, follows it for a while, and lets go.
+pub struct Tracker {
+    /// where it is (world coordinates), eased toward what it follows
+    pub pos: Vec3,
+    /// 0 unseen .. 1 fully there
+    pub alpha: f32,
+    /// its name and what it reads, refreshed a few times a second
+    pub tag: String,
+    pub label: String,
+    /// box size, relative
+    pub size: f32,
+    /// what it is locked onto: one of the form's marks (they stand still), or, for `mean`, the slowly wandering
+    /// middle of all the strands' heads
+    mean: bool,
+    mark: usize,
+    what: &'static str,
+    clock: f32,
+    period: f32,
+    cycle: u32,
+}
+
 enum Phase {
     Run,
     /// seconds into fading the old attractor out
@@ -50,6 +71,8 @@ pub struct World {
     reach: f32,
     reach_goal: f32,
     reach_poll: f32,
+    pub trackers: Vec<Tracker>,
+    track_poll: f32,
 }
 
 impl World {
@@ -60,7 +83,7 @@ impl World {
         let order: Vec<usize> = (0..systems::ALL.len()).map(|i| (first + i) % systems::ALL.len()).collect();
         let look = Look::resolve(cfg);
         let trails = World::make_trails(&look, cfg, order[0], seed, true);
-        World { cfg: cfg.clone(), from_look: look.clone(), target_look: look.clone(), blend: 1.0, theme_stamp: crate::config::theme_stamp(), theme_poll: 0.0, look, trails, logo: logo::load(&cfg.logo), t: 0.0, fade: 1.0, epoch: 0, order, idx: 0, since: 0.0, phase: Phase::Run, acc: 0.0, seed, cycling, cam_phase: (seed % 1000) as f32, hold_camera: false, held: 0.0, reach: 1.0, reach_goal: 1.0, reach_poll: 0.0 }
+        World { cfg: cfg.clone(), from_look: look.clone(), target_look: look.clone(), blend: 1.0, theme_stamp: crate::config::theme_stamp(), theme_poll: 0.0, look, trails, logo: logo::load(&cfg.logo), t: 0.0, fade: 1.0, epoch: 0, order, idx: 0, since: 0.0, phase: Phase::Run, acc: 0.0, seed, cycling, cam_phase: (seed % 1000) as f32, hold_camera: false, held: 0.0, reach: 1.0, reach_goal: 1.0, reach_poll: 0.0, trackers: World::make_trackers(cfg, seed), track_poll: 0.0 }
     }
 
     fn make_trails(look: &Look, cfg: &Config, sys: usize, seed: u64, spread: bool) -> Trails {
@@ -104,7 +127,8 @@ impl World {
             let mut need = 1.0f32;
             for p in &tr.ring[tr.head * tr.n..(tr.head + 1) * tr.n] {
                 if p[3] != 0.0 {
-                    need = need.max(p[1].abs() / 1.2).max(p[0].abs() / 1.85).max((p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt() / 1.7);
+                    // (the picture turns, so any direction in the form's plane comes to stand upright on the screen)
+                    need = need.max((p[0] * p[0] + p[1] * p[1]).sqrt() / 1.42).max((p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt() / 1.75);
                 }
             }
             // what was far half a minute ago still counts: its trail is on screen for a while, and it will be back
@@ -113,6 +137,78 @@ impl World {
         if !self.hold_camera {
             let rate = if self.reach_goal > self.reach { 0.9 } else { 0.08 };
             self.reach += (self.reach_goal - self.reach) * (1.0 - (-dt * rate).exp());
+        }
+    }
+
+    fn make_trackers(cfg: &Config, seed: u64) -> Vec<Tracker> {
+        if !cfg.trackers {
+            return Vec::new();
+        }
+        // fewer on the wallpaper; staggered so they never come or go together
+        let count = if cfg.wall { 4 } else { 6 };
+        (0..count)
+            .map(|i| {
+                let period = 19.0 + 4.3 * i as f32;
+                Tracker { pos: Vec3::ZERO, alpha: 0.0, tag: String::new(), label: String::new(), size: 1.0, mean: i == 2, mark: 0, what: "", clock: period * (0.37 * i as f32 + (seed % 97) as f32 / 97.0).fract(), period, cycle: (seed as u32).wrapping_add(i as u32 * 7919) }
+            })
+            .collect()
+    }
+
+    /// move the tracking boxes: each eases toward the point it follows, fades in over a few seconds, stays, fades
+    /// out, rests, and then picks something else
+    fn track(&mut self, dt: f32) {
+        if self.trackers.is_empty() {
+            return;
+        }
+        let tr = &self.trails;
+        let fade_all = self.fade;
+        let heads = &tr.ring[tr.head * tr.n..(tr.head + 1) * tr.n];
+        self.track_poll += dt;
+        let refresh = self.track_poll >= 0.25;
+        if refresh {
+            self.track_poll = 0.0;
+        }
+        let hash = |x: u32| {
+            let mut h = x.wrapping_mul(747796405).wrapping_add(2891336453);
+            h = ((h >> ((h >> 28) + 4)) ^ h).wrapping_mul(277803737);
+            (h >> 22) ^ h
+        };
+        for (i, t) in self.trackers.iter_mut().enumerate() {
+            t.clock += dt;
+            let fresh = t.clock >= t.period || t.tag.is_empty();
+            if fresh {
+                if t.clock >= t.period {
+                    t.clock = 0.0;
+                }
+                t.cycle = t.cycle.wrapping_add(1);
+                t.size = 0.8 + 0.7 * (hash(t.cycle ^ 0x9e37) % 1000) as f32 / 1000.0;
+                // the next mark that no other box is on
+                if !tr.marks.is_empty() {
+                    t.mark = (t.mark + 1 + hash(t.cycle) as usize % tr.marks.len()) % tr.marks.len();
+                }
+            }
+            // seen for a little over half its time
+            let seen = t.period * 0.58;
+            let fade = 3.0;
+            t.alpha = (t.clock / fade).min((seen - t.clock) / fade).clamp(0.0, 1.0);
+            t.alpha = t.alpha * t.alpha * (3.0 - 2.0 * t.alpha) * fade_all;
+            let at = |p: &[f32; 4]| Vec3::new(p[0], p[1], p[2]);
+            let (goal, what) = if t.mean || tr.marks.is_empty() {
+                (heads.iter().map(at).sum::<Vec3>() / heads.len() as f32, "MEAN")
+            } else {
+                let (name, p) = tr.marks[t.mark % tr.marks.len()];
+                (Vec3::from(p), name)
+            };
+            t.what = what;
+            if goal.is_finite() && goal.length() < 4.0 {
+                let k = if fresh || t.alpha <= 0.0 { 1.0 } else { 1.0 - (-dt / 1.5).exp() };
+                t.pos += (goal - t.pos) * k;
+            }
+            if refresh || fresh {
+                let p = tr.system_of([t.pos.x, t.pos.y, t.pos.z]);
+                t.tag = format!("{:02} {}", i + 1, t.what);
+                t.label = format!("{:+.2} {:+.2} {:+.2}  |v| {:.2}", p[0], p[1], p[2], tr.speed_at(p));
+            }
         }
     }
 
@@ -134,6 +230,7 @@ impl World {
         let dt = dt.clamp(0.0, 0.25);
         self.t += dt;
         self.keep_in_frame(dt);
+        self.track(dt);
         if !self.hold_camera {
             self.held = self.t;
         }
@@ -177,13 +274,13 @@ impl World {
         }
     }
 
-    /// The camera's place: its lean away from the form's face-on axis, the direction of that lean (both radians),
-    /// and its distance. It never orbits the form: it circles the face-on view at a lean of 17 to 45 degrees, so the
-    /// form turns enough to show its depth and is never seen edge-on.
+    /// The camera's place: how far round the form it has gone, its lean away from the form's own axis (both radians),
+    /// and its distance. It orbits the axis the form is thinnest along, like a piece on a turntable seen from 43 to 66
+    /// degrees above its plane: a full, continuous orbit in which the form is never edge-on.
     pub fn orbit(&self) -> (f32, f32, f32) {
         let t = if self.hold_camera { self.held } else { self.t } + self.cam_phase;
-        // slowly: a field of fine dots that slides more than a fraction of a pixel per frame shimmers
-        (t * 0.021, 0.54 + 0.24 * (t * 0.013).sin(), 4.1 * self.reach / self.cfg.zoom.max(0.2) * (1.0 + 0.03 * (t * 0.009).sin()))
+        let rev = self.cfg.orbit.max(10.0);
+        (t * std::f32::consts::TAU / rev, 0.62 + 0.20 * (t * 0.045).sin(), 4.1 * self.reach / self.cfg.zoom.max(0.2) * (1.0 + 0.03 * (t * 0.017).sin()))
     }
 
     /// how far the picture is slid sideways and up, in units of half the screen
@@ -195,7 +292,7 @@ impl World {
     pub fn camera(&self, aspect: f32) -> (Mat4, Mat4, f32) {
         let (around, lean, dist) = self.orbit();
         let eye = Vec3::new(lean.sin() * around.cos(), lean.sin() * around.sin(), lean.cos()) * dist;
-        let view = Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y);
+        let view = Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Z);
         let fov = 38f32.to_radians();
         // a tight depth range around the form, so a 16-bit depth buffer is plenty
         let proj = Mat4::perspective_rh(fov, aspect, (dist - 3.2).max(0.2), dist + 3.2);

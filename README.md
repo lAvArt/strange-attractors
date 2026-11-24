@@ -5,7 +5,7 @@ Strange attractors as a **live wallpaper** and a **screensaver** for [Omarchy](h
 Hundreds of orbits are integrated through the Lorenz, Aizawa, Halvorsen, Thomas, Rössler, Chen-Lee, four-wing and
 Dadras systems and drawn as what a strange attractor really is, a folded sheet: neighbouring orbits are kept side by
 side in ribbons, so the picture is a fine weave of hairlines with near folds hiding far ones, not a tangle of loose
-trails. A slow camera leans around its open side (never edge-on), the system's equations and live numbers sit quietly in the margins, and every few
+trails. A camera orbits it from above its open side (never edge-on), the system's equations and live numbers sit quietly in the margins, and every few
 minutes one attractor fades out and the next grows in.
 
 ![Eight attractors](docs/media/systems.jpg)
@@ -149,6 +149,8 @@ must be converted to paths. Only the shapes and their opacity matter unless you 
 | `preset` | `theme` | see Looks |
 | `palette` | `auto` | `theme`, `original`, or `auto` (the theme, except for `80s` and `90s`) |
 | `annotations` | `true` | the equations and live numbers in the margins |
+| `trackers` | `true` | tracking boxes locked onto the system's fixed points and the orbit's farthest reaches, with faint lines between them; `--no-trackers` for one run |
+| `orbit` | 150 / 80 | seconds for the camera to go once round the form (wallpaper / screensaver). Faster reads as more alive; at 20 to 30 frames a second it also makes fine dots step more per frame |
 | `lines` | `true` | `false` drops the hairlines from a look that has them: `dust` is then grains alone |
 | `system` | `cycle` | an attractor's name (`attractor --list`), or `cycle` to rotate through all |
 | `cycle` | 150 / 90 | seconds on each attractor (wallpaper / screensaver) |
@@ -186,11 +188,20 @@ equations. They also run on a rescaled clock (slowed where the flow is fast, hur
 nearly equal in length and fast loops are not drawn with a few straight pieces. The numbers in the margins come from a
 separate, untouched orbit on the true clock.
 
-**Framing.** The direction in which an orbit varies least is the one to look along: seen that way the form is open,
-seen across it it would be edge-on. The camera circles that face-on view at a lean of 17 to 45 degrees, slowly (fine
-dots that slide more than a fraction of a pixel per frame shimmer). The scale is fitted by projecting the form through
-that same camera path, so its body stands within 80% of the screen's height and 68% of its width at its most awkward,
-and the margins stay free for the annotations.
+**Framing.** The direction in which an orbit varies least is the form's own axis: seen along it the form is open,
+seen across it it would be edge-on. The camera orbits that axis like a piece on a turntable, from 43 to 66 degrees above
+the form's plane, once every 150 seconds on the wallpaper and every 80 in the screensaver (`orbit`). The scale is fitted
+by projecting the form through that same camera path, so its body stands within 80% of the screen's height and 68% of
+its width at its most awkward, the margins stay free for the annotations, and a guard eases the camera back if strands
+ride wider than the fit.
+
+**The ground and the margins.** The ground carries a fine grain fixed to the pixels (about a level either way, so it
+never crawls), a breath of lightness behind the form, and a few hundred motes of dust hanging at fixed places in the
+air around it, which slide against the form as the camera goes round. The annotations are set in the form's own silver
+(the theme's foreground tones); the accent appears only in the dot that marks the running system and in the dust's
+sparkles. Tracking boxes lock onto places that stand still (the system's equilibria, found by Newton's method, and the
+orbit's farthest reaches) and onto the slowly wandering mean of the strands' heads; each fades in over a few seconds,
+stays, and lets go, never all at once, and reads out the real coordinates and flow speed of its point.
 
 **Drawing.** Every strand keeps a ring of its latest points; each frame only the newly computed points are uploaded to
 a GPU storage buffer. The vertex shader reads that ring and widens every point of a strand into one continuous triangle

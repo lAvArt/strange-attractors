@@ -86,6 +86,7 @@ pub struct Renderer {
     flow: Layer,
     cross: Layer,
     dot: Layer,
+    mote: Layer,
     pp_bgl: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     nearest: wgpu::Sampler,
@@ -100,6 +101,8 @@ pub struct Renderer {
     text_bind: Option<wgpu::BindGroup>,
     text_buf: wgpu::Buffer,
     text_count: u32,
+    /// how many of those are the margins' text (laid out a few times a second); the trackers follow, every frame
+    text_static: u32,
     text_tick: i64,
     annot: Option<Annot>,
     /// the logo's aspect ratio (w/h), 0 without a logo
@@ -232,6 +235,7 @@ impl Renderer {
         };
         let (sheet, flow, cross, dot) = (layer("vs_sheet", "fs_sheet", true, false), layer("vs_flow", "fs_line", false, false), layer("vs_cross", "fs_line", false, false), layer("vs_dot", "fs_dot", false, false));
         let sheet_unseen = layer("vs_sheet", "fs_sheet", true, true).pipe;
+        let mote = layer("vs_mote", "fs_dot", false, false);
         let veil_pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("veil"),
             layout: Some(&layout),
@@ -337,6 +341,7 @@ impl Renderer {
             flow,
             cross,
             dot,
+            mote,
             pp_bgl,
             sampler: veil_sampler,
             nearest,
@@ -350,6 +355,7 @@ impl Renderer {
             text_bind: None,
             text_buf,
             text_count: 0,
+            text_static: 0,
             text_tick: -1,
             annot: None,
             logo_aspect,
@@ -362,7 +368,7 @@ impl Renderer {
             seen_epoch: u32::MAX,
         };
         r.resize(out);
-        if world.cfg.annotations {
+        if world.cfg.annotations || world.cfg.trackers {
             r.build_annot();
         }
         r
@@ -474,6 +480,9 @@ impl Renderer {
         let mut cf = frame(look.cross_every.max(1));
         cf.st2[3] = look.opacity * look.line_alpha;
         self.queue.write_buffer(&self.cross.buf, 0, bytemuck::bytes_of(&cf));
+        let mut mf = frame(1);
+        mf.st2[3] = look.motes * world.cfg.overlay.then_some(0.0).unwrap_or(1.0);
+        self.queue.write_buffer(&self.mote.buf, 0, bytemuck::bytes_of(&mf));
         let mut df = frame(look.dot_every.max(1));
         // in the dot pass this slot says how faint a fully covered dot becomes (0: nothing covers dots)
         df.st3[0] = if self.t.veil.is_some() { look.soft } else { 0.0 };
@@ -501,20 +510,27 @@ impl Renderer {
             lt: [tint[0], tint[1], tint[2], cfg.logo_opacity],
             g0: b4(look.g0, 0.0),
             g1: b4(look.g1, 0.0),
-            q: [look.quant, self.t.k as f32, look.scan, 0.0],
+            q: [look.quant, self.t.k as f32, look.scan, look.grain],
         };
         self.queue.write_buffer(&self.pass_buf, 0, bytemuck::bytes_of(&pass));
 
-        // the annotations change a few times a second, and on every frame of a fade
+        // the annotations change a few times a second, and on every frame of a fade; the tracking boxes move, so they
+        // are laid out every frame, after them in the same buffer
         if let Some(a) = &self.annot {
             let tick = if world.settled() { (world.t * 6.0) as i64 } else { -2 - (world.t * 1000.0) as i64 };
             if tick != self.text_tick {
                 self.text_tick = tick;
-                let v = a.layout(world, (sw, sh));
-                let v = &v[..v.len().min(MAX_TEXT_VERTS)];
-                self.text_count = v.len() as u32;
+                let v = if world.cfg.annotations { a.layout(world, (sw, sh)) } else { Vec::new() };
+                let v = &v[..v.len().min(MAX_TEXT_VERTS / 2)];
+                self.text_static = v.len() as u32;
                 self.queue.write_buffer(&self.text_buf, 0, bytemuck::cast_slice(v));
             }
+            let v = a.trackers(world, (sw, sh));
+            let v = &v[..v.len().min(MAX_TEXT_VERTS / 2)];
+            if !v.is_empty() {
+                self.queue.write_buffer(&self.text_buf, self.text_static as u64 * std::mem::size_of::<TextVertex>() as u64, bytemuck::cast_slice(v));
+            }
+            self.text_count = self.text_static + v.len() as u32;
         }
 
         let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -573,6 +589,11 @@ impl Renderer {
                 rp.set_bind_group(0, bind, &[]);
                 rp.set_vertex_buffer(0, self.text_buf.slice(..));
                 rp.draw(0..self.text_count, 0..1);
+            }
+            if look.motes > 0.0 {
+                rp.set_pipeline(&self.mote.pipe);
+                rp.set_bind_group(0, &self.mote.bind, &[]);
+                rp.draw(0..3, 0..320);
             }
             if sheets {
                 rp.set_pipeline(if look.wash > 0.0 { &self.sheet.pipe } else { &self.sheet_unseen });

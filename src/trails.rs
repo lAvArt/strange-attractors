@@ -44,6 +44,10 @@ pub struct Trails {
     probe: (Vec3, Vec3),
     stretch: f64,
     stretch_time: f64,
+    /// Places worth pointing at, in world coordinates, each with what it is: the system's equilibria, and the
+    /// orbit's farthest reaches along the form's own axes. They stand still, so a box locked onto one shows the
+    /// camera's parallax and nothing else.
+    pub marks: Vec<(&'static str, [f32; 3])>,
     /// xyz in world coordinates; |w| is the strand's weight there (0..1), negative while detached from its ribbon
     pub ring: Vec<[f32; 4]>,
 }
@@ -113,7 +117,7 @@ impl Trails {
         }
         let cal_probe = cal.orbit[0];
         let probe_d = cal.radius * 1e-8;
-        let mut t = Trails { n, len, m, sys, cal, pos, coef, thick, state: vec![0; n], pitch: pitches, dir, probe: (cal_probe, [cal_probe[0] + probe_d, cal_probe[1], cal_probe[2]]), stretch: 0.0, stretch_time: 0.0, head: 0, steps: 0, ring: vec![[0.0; 4]; n * len] };
+        let mut t = Trails { n, len, m, sys, cal, pos, coef, thick, state: vec![0; n], pitch: pitches, dir, probe: (cal_probe, [cal_probe[0] + probe_d, cal_probe[1], cal_probe[2]]), marks: Vec::new(), stretch: 0.0, stretch_time: 0.0, head: 0, steps: 0, ring: vec![[0.0; 4]; n * len] };
         // let every ribbon turn into the direction the flow stretches before anything is drawn
         let mut seen: Vec<Vec3> = Vec::new();
         let skip = (n / 96).max(1);
@@ -140,6 +144,22 @@ impl Trails {
                 t.ring[slot * n + k] = p;
             }
         }
+        // (after the last refit of the radius: marks are stored in world coordinates)
+        let mut marks: Vec<(&'static str, [f32; 3])> = Vec::new();
+        for e in systems::equilibria(&t.sys, &t.cal) {
+            let w = t.world(e);
+            marks.push(("FIXED POINT", [w[0], w[1], w[2]]));
+        }
+        for axis in 0..2 {
+            let key = |p: &Vec3| dot(sub(*p, t.cal.center), t.cal.basis[axis]);
+            let lo = t.cal.orbit.iter().copied().min_by(|a, b| key(a).partial_cmp(&key(b)).unwrap());
+            let hi = t.cal.orbit.iter().copied().max_by(|a, b| key(a).partial_cmp(&key(b)).unwrap());
+            for e in [lo, hi].into_iter().flatten() {
+                let w = t.world(e);
+                marks.push(("EXTENT", [w[0], w[1], w[2]]));
+            }
+        }
+        t.marks = marks;
         if spread {
             for _ in 0..len {
                 t.step();
@@ -352,6 +372,21 @@ impl Trails {
     /// simulated time, in the system's own units
     pub fn time(&self) -> f64 {
         self.steps as f64 * self.cal.dt
+    }
+
+    /// a point of the picture (world coordinates) in the system's own coordinates
+    pub fn system_of(&self, w: [f32; 3]) -> Vec3 {
+        let c = &self.cal;
+        let mut p = c.center;
+        for i in 0..3 {
+            p = axpy(p, c.basis[i], w[i] as f64 * c.radius);
+        }
+        p
+    }
+
+    /// how fast the flow runs at a point (the system's own coordinates and time)
+    pub fn speed_at(&self, p: Vec3) -> f64 {
+        norm((self.sys.f)(p))
     }
 
     /// one strand to report on: where it is (the system's own coordinates) and how fast it moves

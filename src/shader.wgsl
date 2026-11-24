@@ -196,7 +196,7 @@ fn fs_line(i: VOut) -> @location(0) vec4<f32> {
 struct DOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) q: vec2<f32>,     // offset from the centre, px
-    @location(1) rb: vec3<f32>,    // radius px, blur px, kind
+    @location(1) rb: vec4<f32>,    // radius px, blur px, kind, edge softness
     @location(2) col: vec4<f32>,
 };
 
@@ -264,10 +264,11 @@ fn vs_dot(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> D
     var alpha = abs(p.w) * age_fade(j) * u.p1.x * show * u.st2.w * born;
     var blur = 0.5;
     var kind = 0.0;   // 0: a grain, 1: a disc of light out of focus, 2: a soft light
+    var soft = 0.3;   // how much of a disc's radius its edge takes to fade
     if (mode > 0.5 && mode < 1.5) {
         // halftone: the dot's area is the tone (so the shading reads as a smooth ramp), and even in full shade a dot
         // stays a small, clearly lit mark rather than going dark
-        r = u.c2.w * sqrt(mix(1.0, 0.10 + 0.95 * l, u.st.x)) * (0.75 + 0.25 * abs(p.w)) * (0.85 + 0.3 * h2);
+        r = u.c2.w * sqrt(mix(1.0, 0.10 + 0.95 * l, u.st.x)) * (0.75 + 0.25 * abs(p.w)) * (0.62 + 0.85 * h2 * h2);
         alpha *= step(0.0, p.w);
         if (u.st3.x > 0.0) {
             // behind a nearer sheet a dot is not cut off: it thins and dims, smoothly with how far behind it lies
@@ -293,18 +294,25 @@ fn vs_dot(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> D
             alpha = min(alpha * 1.6, 1.0);
         }
         if (u.st.y > 0.0) {
+            // every grain has its own aperture, drawn once from its hash: many small, fewer medium, a few large
+            let hz = hash1(id * 11u + 3u);
+            let size = 0.22 + 2.0 * hz * hz * hz;
+            let k = u.p2.z / 1080.0;
             if (pick > 0.9993 && coc < 2.5) {
-                // a few soft lights in the focal plane
+                // a few soft lights in the focal plane, no two the same size
                 kind = 2.0;
                 col = u.c2.rgb;
-                blur = (2.0 + 3.2 * h0) * u.p2.z / 1080.0;
-                alpha = 0.45 * u.p1.x * age_fade(j);
-            } else if (pick > 0.9965) {
-                // the brightest grains swell into discs of light as they leave the focal plane
-                let d = smoothstep(2.0, 4.5, coc);
-                kind = step(0.5, d);
-                blur = mix(0.5 + min(coc, 2.5), min(coc, 4.6 * u.p2.z / 1080.0), kind);
-                alpha = mix(alpha, (0.07 + 0.15 * h2) * u.p1.x * age_fade(j) * abs(p.w), kind);
+                blur = (1.3 + 5.5 * size * 0.45) * k;
+                alpha = (0.3 + 0.3 * h0) * u.p1.x * age_fade(j);
+            } else if (pick > 0.9925) {
+                // the brightest grains swell into discs of light as they leave the focal plane: how far they swell
+                // follows both the distance from that plane and the grain's own aperture
+                let rad = clamp(coc * size, 0.0, 8.5 * k);
+                kind = step(2.2, rad);
+                blur = mix(0.5 + min(coc, 2.5), rad, kind);
+                // small discs are the bright ones; and each has its own softness of edge
+                alpha = mix(alpha, (0.07 + 0.20 * h2) * mix(1.25, 0.6, clamp(rad / (8.5 * k), 0.0, 1.0)) * u.p1.x * age_fade(j) * abs(p.w), kind);
+                soft = mix(0.12, 0.7, hash1(id * 13u + 1u));
                 col = mix(col, u.c2.rgb, 0.5 * kind);
             } else {
                 // the rest blur a little and then fade out: no haze of half-seen grains
@@ -321,7 +329,7 @@ fn vs_dot(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> D
     let c = cs[vi] * reach;
     o.pos = u.proj * vec4<f32>(pv + vec3<f32>(c * (w * u.p2.y), 0.0), 1.0);
     o.q = c;
-    o.rb = vec3<f32>(r, blur, kind);
+    o.rb = vec4<f32>(r, blur, kind, soft);
     let fg = fog_of(w);
     o.col = vec4<f32>(mix(col, u.fog.rgb, fg), alpha * ok * (1.0 - 0.55 * fg));
     return o;
@@ -338,7 +346,7 @@ fn fs_dot(i: DOut) -> @location(0) vec4<f32> {
         cov = exp(-4.5 * d * d / (b * b)) * step(d, b);
     } else if (i.rb.z > 0.5) {
         // a disc out of focus: even, a touch brighter at the rim, with a crisp edge
-        cov = clamp((b - d) / 3.0, 0.0, 1.0) * (0.8 + 0.2 * smoothstep(0.5 * b, b, d));
+        cov = clamp((b - d) / max(i.rb.w * b, 1.3), 0.0, 1.0) * (0.8 + 0.2 * smoothstep(0.5 * b, b, d));
     } else {
         // a disc of radius r under a blur of radius b: the same ramp as a line, with the light spread over the area
         cov = clamp((r + b - d) / (2.0 * b), 0.0, 1.0) * min(1.0, (r * r) / (b * b));
@@ -405,4 +413,32 @@ fn fs_sheet(i: SOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_veil(i: SOut) -> @location(0) vec4<f32> {
     return vec4<f32>(i.vw, 0.0, 0.0);
+}
+
+// motes: a few hundred specks of dust hanging in the air around the form, at fixed places and many depths. They
+// belong to the ground, but being placed in space they slide against the form as the camera goes round.
+@vertex
+fn vs_mote(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> DOut {
+    let a = hash1(ii * 4u + 1u) * 6.2831853;
+    let z = hash1(ii * 4u + 2u) * 2.0 - 1.0;
+    let rad = 1.2 + 2.6 * hash1(ii * 4u + 3u);
+    let s = sqrt(max(1.0 - z * z, 0.0));
+    let pos = vec3<f32>(s * cos(a), s * sin(a), z * 0.8) * rad;
+    let pv = (u.view * vec4<f32>(pos, 1.0)).xyz;
+    let w = -pv.z;
+    let hz = hash1(ii * 4u + 4u);
+    let k = u.p2.z / 1080.0;
+    let r = max((0.3 + 1.1 * hz * hz * hz) * k, 0.42);
+    let coc = u.st.y * abs(w - u.p2.x) / max(w, 0.2) * (u.p2.x * k) * 0.35 + 0.6 * abs(w - u.p2.x);
+    let blur = 0.5 + min(coc, 4.0 * k);
+    let ok = step(0.4, w);
+    let reach = (r + blur) * ok;
+    var cs = array<vec2<f32>, 3>(vec2<f32>(-1.7321, -1.0), vec2<f32>(1.7321, -1.0), vec2<f32>(0.0, 2.0));
+    let c = cs[vi] * reach;
+    var o: DOut;
+    o.pos = u.proj * vec4<f32>(pv + vec3<f32>(c * (w * u.p2.y), 0.0), 1.0);
+    o.q = c;
+    o.rb = vec4<f32>(r, blur, 0.0, 0.3);
+    o.col = vec4<f32>(u.c1.rgb, (0.25 + 0.75 * hash1(ii * 7u + 9u)) * u.st2.w * ok);
+    return o;
 }

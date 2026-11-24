@@ -9,7 +9,7 @@ struct P {
     lt: vec4<f32>,  // logo: tint rgb, opacity
     g0: vec4<f32>,  // the stylised grounds' two extra colours (sun and grid; the copper bars)
     g1: vec4<f32>,
-    q: vec4<f32>,   // x: colour levels per channel to dither down to (0: off), y: whole-number upscale (0: filtered), z: scanlines
+    q: vec4<f32>,   // x: colour levels per channel to dither down to (0: off), y: whole-number upscale (0: filtered), z: scanlines, w: grain
 };
 @group(0) @binding(0) var t0: texture_2d<f32>; // the rasterised logo, premultiplied (ground) / the scene (blit) / the glyph atlas (text)
 @group(0) @binding(1) var samp: sampler;
@@ -127,7 +127,11 @@ fn fs_ground(i: FOut) -> @location(0) vec4<f32> {
     // channels keeps it neutral and is cheap enough for a full-resolution pass
     let nz = hash12(i.pos.xy + vec2<f32>(p.v.w * 61.0, 0.0)) - 0.5;
     let step = (1.0 / 255.0) * 2.4 * sqrt(max(c, vec3<f32>(0.0)) + vec3<f32>(0.004));
-    c = max(c + step * (nz * 1.3) * select(1.0, 0.0, overlay), vec3<f32>(0.0));
+    // grain: fixed to the pixels (it never crawls), about a level either way, so the ground has the tooth of paper
+    // rather than the cleanness of a gradient; and a breath of lightness in the middle, behind the form
+    let grain = (hash12(floor(i.pos.xy) * 1.37 + vec2<f32>(11.0, 5.0)) + hash12(floor(i.pos.xy * 0.5) + vec2<f32>(3.0, 17.0)) - 1.0) * p.q.w;
+    let lift = 1.0 + 0.5 * p.q.w * 0.12 * exp(-dot(r, r) * 1.6);
+    c = max(c * lift + step * (nz * 1.3 + grain) * select(1.0, 0.0, overlay), vec3<f32>(0.0));
     return vec4<f32>(c, select(1.0, lg.a, overlay));
 }
 
