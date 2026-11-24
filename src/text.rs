@@ -66,7 +66,7 @@ impl Annot {
         let chunk = chunk.max(1) as f32;
         // a coarse picture (a pixelated look) needs its text hard-edged too
         let hard = chunk > 1.0 || h < 700;
-        let body = (h as f32 * if chunk > 1.0 { 0.0125 } else { 0.0108 } / chunk).round().clamp(if hard { 11.0 } else { 9.0 }, 40.0);
+        let body = (h as f32 * if chunk > 1.0 { 0.0135 } else { 0.0125 } / chunk).round().clamp(if hard { 11.0 } else { 9.0 }, 40.0);
         let px = [body, (body * if hard { 2.0 } else { 1.9 }).round()];
         let atlas_w = 1024u32;
         let mut rows: Vec<u8> = vec![0; (atlas_w * 4) as usize];
@@ -160,8 +160,8 @@ impl Annot {
         let c = |rgb: [f32; 3], a: f32| [rgb[0], rgb[1], rgb[2], if hard { (a * 1.9).min(1.0) } else { a }];
         // the system's own text fades with it; the frame stays
         let f = world.fade * world.fade * (3.0 - 2.0 * world.fade);
-        let quiet = c(look.text, 0.62 * f);
-        let faint = c(look.text, 0.34 * f);
+        let quiet = c(look.text, 0.78 * f);
+        let faint = c(look.text, 0.5 * f);
         let live = c(look.text_hi, 0.9 * f);
         let rule = c(look.text, 0.30);
         let lh = (self.px[0] * 1.62).round();
@@ -249,18 +249,18 @@ impl Annot {
         }
 
         // bottom right: the camera, and the maker
-        let (yaw, pitch, dist) = world.orbit();
+        let (around, lean, dist) = world.orbit();
         let mut y = y1 - arm - lh * 3.0 - self.px[0] * 0.3;
         for (label, value) in [
-            ("AZIMUTH", format!("{:>7.2}°", yaw.to_degrees().rem_euclid(360.0))),
-            ("ELEVATION", format!("{:>7.2}°", pitch.to_degrees())),
+            ("AZIMUTH", format!("{:>7.2}°", around.to_degrees().rem_euclid(360.0))),
+            ("ELEVATION", format!("{:>7.2}°", 90.0 - lean.to_degrees())),
             ("DISTANCE", format!("{:>7.3} ", dist)),
         ] {
             self.text(&mut v, &value, 0, x1 - arm, y, true, 0.0, c(look.text_hi, 0.9));
-            self.text(&mut v, label, 0, x1 - arm - a0 * 11.0, y, true, 0.12, c(look.text, 0.34));
+            self.text(&mut v, label, 0, x1 - arm - a0 * 11.0, y, true, 0.12, c(look.text, 0.5));
             y += lh;
         }
-        self.text(&mut v, "ATTRACTOR — LAVART STUDIO", 0, x1 - arm, y, true, 0.12, c(look.text, 0.34));
+        self.text(&mut v, "ATTRACTOR — LAVART STUDIO", 0, x1 - arm, y, true, 0.12, c(look.text, 0.5));
         let _ = systems::ALL;
         v
     }

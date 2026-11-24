@@ -7,6 +7,8 @@ use crate::world::World;
 use bytemuck::{Pod, Zeroable};
 
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth16Unorm;
+/// the veil: view depth and strength of the nearest sheet, at a quarter of the scene's size so it can be read smoothly
+const VEIL: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
 const MAX_TEXT_VERTS: usize = 6 * 4096;
 
 #[repr(C)]
@@ -41,7 +43,16 @@ struct Pass {
     q: [f32; 4],
 }
 
+/// What the dots of a soft look read to know how much of them a nearer sheet covers, and the bind group that hands
+/// it to them.
+struct Veil {
+    view: wgpu::TextureView,
+    depth: wgpu::TextureView,
+    dot_bind: wgpu::BindGroup,
+}
+
 struct Targets {
+    veil: Option<Veil>,
     /// the whole-number upscale of a pixelated look (0: none)
     k: u32,
     depth: wgpu::TextureView,
@@ -67,6 +78,10 @@ pub struct Renderer {
     sheet: Layer,
     /// the same sheet with colour writes off, for looks whose sheet only hides
     sheet_unseen: wgpu::RenderPipeline,
+    veil_pipe: wgpu::RenderPipeline,
+    bgl: wgpu::BindGroupLayout,
+    blank: wgpu::TextureView,
+    soft: bool,
     flow: Layer,
     cross: Layer,
     dot: Layer,
@@ -118,6 +133,15 @@ fn tex_group(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, sampler: &wgpu:
     })
 }
 
+fn strand_entries<'a>(buf: &'a wgpu::Buffer, ring: &'a wgpu::Buffer, veil: &'a wgpu::TextureView, sampler: &'a wgpu::Sampler) -> [wgpu::BindGroupEntry<'a>; 4] {
+    [
+        wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
+        wgpu::BindGroupEntry { binding: 1, resource: ring.as_entire_binding() },
+        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(veil) },
+        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(sampler) },
+    ]
+}
+
 fn tex2d(device: &wgpu::Device, w: u32, h: u32, format: wgpu::TextureFormat, usage: wgpu::TextureUsages) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: None,
@@ -153,7 +177,22 @@ impl Renderer {
                     ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::VERTEX, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
             ],
+        });
+        let blank = tex2d(device, 1, 1, VEIL, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING).create_view(&Default::default());
+        let veil_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&bgl)], immediate_size: 0 });
         let over = wgpu::BlendState { color: wgpu::BlendComponent::OVER, alpha: wgpu::BlendComponent::OVER };
@@ -175,7 +214,7 @@ impl Renderer {
             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
                 layout: &bgl,
-                entries: &[wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() }, wgpu::BindGroupEntry { binding: 1, resource: ring.as_entire_binding() }],
+                entries: &strand_entries(&buf, &ring, &blank, &veil_sampler),
             });
             let pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(vs),
@@ -192,6 +231,22 @@ impl Renderer {
         };
         let (sheet, flow, cross, dot) = (layer("vs_sheet", "fs_sheet", true, false), layer("vs_flow", "fs_line", false, false), layer("vs_cross", "fs_line", false, false), layer("vs_dot", "fs_dot", false, false));
         let sheet_unseen = layer("vs_sheet", "fs_sheet", true, true).pipe;
+        let veil_pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("veil"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_sheet"), compilation_options: Default::default(), buffers: &[] },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_veil"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState { format: VEIL, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() },
+            depth_stencil: Some(depth(true, wgpu::CompareFunction::LessEqual)),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
 
         let pp_shader = device.create_shader_module(wgpu::include_wgsl!("pp.wgsl"));
         let pp_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -235,13 +290,7 @@ impl Renderer {
         let ground = pp_make("vs_full", "fs_ground", None, true, &[]);
         let blit = pp_make("vs_full", "fs_blit", None, false, &[]);
         let text = pp_make("vs_text", "fs_text", Some(over), true, &[Some(text_layout)]);
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            ..Default::default()
-        });
+        let sampler = &veil_sampler;
         // the logo's mask: a 1x1 transparent texel when there is none, so the ground always binds the same layout
         let (lw, lh, ldata): (u32, u32, &[u8]) = match &world.logo {
             Some(l) => (l.w, l.h, &l.rgba),
@@ -265,7 +314,7 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let ground_bind = tex_group(device, &pp_bgl, &sampler, &logo_view, &pass_buf);
+        let ground_bind = tex_group(device, &pp_bgl, sampler, &logo_view, &pass_buf);
         let text_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("text"),
             size: (MAX_TEXT_VERTS * std::mem::size_of::<TextVertex>()) as u64,
@@ -280,11 +329,15 @@ impl Renderer {
             ring,
             sheet,
             sheet_unseen,
+            veil_pipe,
+            bgl,
+            blank,
+            soft: world.look.soft > 0.0,
             flow,
             cross,
             dot,
             pp_bgl,
-            sampler,
+            sampler: veil_sampler,
             nearest,
             pixel: world.look.pixel,
             chunk: world.look.chunk.max(1),
@@ -299,7 +352,7 @@ impl Renderer {
             text_tick: -1,
             annot: None,
             logo_aspect,
-            t: Targets { k: 0, depth: tex2d(device, 1, 1, DEPTH, wgpu::TextureUsages::RENDER_ATTACHMENT).create_view(&Default::default()), mid: None, w: 0, h: 0 },
+            t: Targets { veil: None, k: 0, depth: tex2d(device, 1, 1, DEPTH, wgpu::TextureUsages::RENDER_ATTACHMENT).create_view(&Default::default()), mid: None, w: 0, h: 0 },
             out: (0, 0),
             n,
             len,
@@ -342,7 +395,14 @@ impl Renderer {
             (v, g)
         });
         let rebuilt = self.annot.is_some() && self.t.h != h;
-        self.t = Targets { k, depth, mid, w, h };
+        let veil = self.soft.then(|| {
+            let (vw, vh) = (w.div_ceil(4), h.div_ceil(4));
+            let view = tex2d(&self.device, vw, vh, VEIL, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING).create_view(&Default::default());
+            let depth = tex2d(&self.device, vw, vh, DEPTH, wgpu::TextureUsages::RENDER_ATTACHMENT).create_view(&Default::default());
+            let dot_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &self.bgl, entries: &strand_entries(&self.dot.buf, &self.ring, &view, &self.sampler) });
+            Veil { view, depth, dot_bind }
+        });
+        self.t = Targets { veil, k, depth, mid, w, h };
         if rebuilt {
             self.build_annot();
         }
@@ -409,7 +469,10 @@ impl Renderer {
         self.queue.write_buffer(&self.flow.buf, 0, bytemuck::bytes_of(&frame(2)));
         self.queue.write_buffer(&self.sheet.buf, 0, bytemuck::bytes_of(&frame(sheet_stride)));
         self.queue.write_buffer(&self.cross.buf, 0, bytemuck::bytes_of(&frame(look.cross_every.max(1))));
-        self.queue.write_buffer(&self.dot.buf, 0, bytemuck::bytes_of(&frame(look.dot_every.max(1))));
+        let mut df = frame(look.dot_every.max(1));
+        // in the dot pass this slot says how faint a fully covered dot becomes (0: nothing covers dots)
+        df.st3[0] = if self.t.veil.is_some() { look.soft } else { 0.0 };
+        self.queue.write_buffer(&self.dot.buf, 0, bytemuck::bytes_of(&df));
 
         let cfg = &world.cfg;
         let style = if self.logo_aspect <= 0.0 {
@@ -451,7 +514,31 @@ impl Renderer {
 
         let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         let groups = n / m;
-        let sheets = look.sheet && m > 1;
+        let sheets = look.sheet && m > 1 && self.t.veil.is_none();
+        let sheet_verts = 2 * (live / sheet_stride + 2);
+        if let (Some(v), true) = (&self.t.veil, m > 1) {
+            // the veil: how deep the nearest sheet lies at each place and how much it covers, for the dots to read
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &v.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 1.0e4, g: 0.0, b: 0.0, a: 0.0 }), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &v.depth,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            rp.set_pipeline(&self.veil_pipe);
+            rp.set_bind_group(0, &self.sheet.bind, &[]);
+            rp.draw(0..sheet_verts, 0..groups * ((m - 2) / sheet_wide + 1));
+        }
         {
             let color = self.t.mid.as_ref().map(|m| &m.0).unwrap_or(target);
             let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -485,7 +572,7 @@ impl Renderer {
             if sheets {
                 rp.set_pipeline(if look.wash > 0.0 { &self.sheet.pipe } else { &self.sheet_unseen });
                 rp.set_bind_group(0, &self.sheet.bind, &[]);
-                rp.draw(0..2 * (live.div_ceil(sheet_stride) + 1), 0..groups * ((m - 2) / sheet_wide + 1));
+                rp.draw(0..sheet_verts, 0..groups * ((m - 2) / sheet_wide + 1));
             }
             if look.line > 0.0 {
                 rp.set_pipeline(&self.flow.pipe);
@@ -503,8 +590,8 @@ impl Renderer {
                 // dots that only appear where lines dissolve need only the tail's rows
                 let first = if look.dots == Dots::Dissolve { (((look.dissolve - 0.14).max(0.0) * len as f32) as u32 / every).min(rows) } else { 0 };
                 rp.set_pipeline(&self.dot.pipe);
-                rp.set_bind_group(0, &self.dot.bind, &[]);
-                rp.draw(0..4, first * n..rows * n);
+                rp.set_bind_group(0, self.t.veil.as_ref().map(|v| &v.dot_bind).unwrap_or(&self.dot.bind), &[]);
+                rp.draw(0..3, first * n..rows * n);
             }
         }
         if let Some((_, group)) = &self.t.mid {

@@ -5,7 +5,7 @@ Strange attractors as a **live wallpaper** and a **screensaver** for [Omarchy](h
 Hundreds of orbits are integrated through the Lorenz, Aizawa, Halvorsen, Thomas, Rössler, Chen-Lee, four-wing and
 Dadras systems and drawn as what a strange attractor really is, a folded sheet: neighbouring orbits are kept side by
 side in ribbons, so the picture is a fine weave of hairlines with near folds hiding far ones, not a tangle of loose
-trails. A slow camera orbits it, the system's equations and live numbers sit quietly in the margins, and every few
+trails. A slow camera leans around its open side (never edge-on), the system's equations and live numbers sit quietly in the margins, and every few
 minutes one attractor fades out and the next grows in.
 
 ![Eight attractors](docs/media/systems.jpg)
@@ -41,11 +41,11 @@ Try it without the plugin: `attractor --bench 150`, `attractor --windowed`, `att
 
 | preset | |
 |---|---|
-| `theme` (default) | the `weave`, in the system theme's colours |
+| `theme` (default) | `stipple` for the wallpaper and `dust` for the screensaver, in the system theme's colours |
 | `weave` | a wireframe of the sheet: hairlines along the flow and across it, coming apart into dust where the trails end |
 | `contour` | fine parallel lines along the flow, like the contours of a relief, brightest where the sheet faces the light, with a shallow depth of field |
-| `stipple` | a halftone: dots whose size is the light, each at its own fixed place so nothing beats or shimmers |
-| `dust` | grains scattered through the sheets, sharp in the focal plane and soft discs before and behind it |
+| `stipple` | a halftone: dots whose area is the light, each at its own fixed place so nothing beats or shimmers. Nothing is cut off behind a nearer fold: dots there thin and dim smoothly |
+| `dust` | grains riding the strands like silk, crisp in the focal plane; before and behind it the brightest swell into discs of light, with a few soft lights and sparkles in the theme's accent |
 | `80s` | a vector display: a hidden-line wireframe in magenta and cyan over a banded sun and a grid, scanlines, chunky text |
 | `90s` | early computer graphics: flat-shaded ribbons in a coarse picture of about 400 lines (640x400 on a 3200x2000 panel) scaled up in whole pixels and dithered down to 216 colours, over copper bars |
 
@@ -82,16 +82,17 @@ four runs), GPU milliseconds per frame at 3200x2000:
 
 | look | wallpaper | screensaver |
 |---|---|---|
-| `weave` (default) | 2.4 - 2.6 ms (600 strands) | 3.7 ms (960 strands) |
+| `stipple` (the wallpaper's default) | about 2.3 ms (600 strands x 300 dots) | about 2.9 ms |
+| `dust` (the screensaver's default) | about 2.8 ms | about 4.3 ms (1040 strands x 336 grains) |
+| `weave` | 2.4 - 2.6 ms (600 strands) | 3.7 ms (960 strands) |
 | `contour` | 2.9 ms | 4.5 ms |
-| `stipple` | 2.7 ms | 4.2 ms |
-| `dust` | 3.2 ms | 4.9 ms |
 | `80s` | 2.8 ms | 2.9 ms |
 | `90s` | 1.3 ms | 1.0 ms |
 
 For scale: the previous renderer (256 trails) took 1.5 - 1.9 ms for its wallpaper when drawing the scene at half size and
 2.0 - 2.3 ms at true native size on the same machine in the same sessions. Timings on a laptop in use vary by a third
-from one minute to the next; these are the better runs.
+from one minute to the next; these are the better runs. (The `stipple` and `dust` rows were measured in a slower
+session, 3.5 / 4.3 ms and 4.6 / 6.8 ms against 3.9 ms for the `weave` wallpaper, and are scaled to the same footing.)
 
 How: everything is one render pass straight into the output, with no intermediate full-size texture; lines are single
 triangle strips, anti-aliased analytically instead of by multisampling; the older, fainter part of every strand is drawn
@@ -184,6 +185,12 @@ equations. They also run on a rescaled clock (slowed where the flow is fast, hur
 nearly equal in length and fast loops are not drawn with a few straight pieces. The numbers in the margins come from a
 separate, untouched orbit on the true clock.
 
+**Framing.** The direction in which an orbit varies least is the one to look along: seen that way the form is open,
+seen across it it would be edge-on. The camera circles that face-on view at a lean of 17 to 45 degrees, slowly (fine
+dots that slide more than a fraction of a pixel per frame shimmer). The scale is fitted by projecting the form through
+that same camera path, so its body stands within 80% of the screen's height and 68% of its width at its most awkward,
+and the margins stay free for the annotations.
+
 **Drawing.** Every strand keeps a ring of its latest points; each frame only the newly computed points are uploaded to
 a GPU storage buffer. The vertex shader reads that ring and widens every point of a strand into one continuous triangle
 strip with a shared tangent at each point, so there are no joints to gap, overlap or bead. The fragment shader computes
@@ -191,7 +198,15 @@ exact coverage (a pixel-wide box against the line), so a hairline thinner than a
 dots, and depth of field is the same formula with a wider box: nothing is multisampled and nothing is blurred
 afterwards. Strips between neighbouring strands are written to the depth buffer so near folds hide far ones; far
 strands sink toward the ground colour. Strand spacing is deliberately uneven and dots sit at fixed, hashed offsets, so
-regular marks never beat against the pixel grid.
+regular marks never beat against the pixel grid. Wherever points are thinned (every other point of an old line, the
+strips of a sheet) they are chosen by their slot in the ring, not by their age, so the same points are drawn every
+frame and nothing swaps as the head moves on; new dots swell in over a second. In the dot looks a nearer sheet does not
+cut off what is behind it: its depth and strength are drawn into a small texture that every dot reads, and a covered
+dot thins and dims in proportion.
+
+`attractor --flicker 60 --hold --wallpaper --preset stipple` measures this: it renders consecutive frames at the real
+pacing with the camera held still, when nothing but growing heads and fading tails should change, and reports how many
+pixels jump. `attractor --dark-check` counts pixels where the form made a dark ground darker (or a light one lighter).
 
 Remote control: `omarchy-shell attractor preview` starts the screensaver now, `omarchy-shell attractor status` reports
 the state, `omarchy-shell attractor restart` restarts the wallpaper.

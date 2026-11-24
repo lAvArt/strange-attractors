@@ -110,15 +110,18 @@ pub fn rk4(f: impl Fn(Vec3) -> Vec3, p: Vec3, dt: f64) -> Vec3 {
     ]
 }
 
-/// Where the orbit lives and how fast it moves.
+/// Where the orbit lives, how it lies, and how fast it moves.
 #[derive(Clone)]
 pub struct Calib {
     pub center: Vec3,
-    /// frames the orbit: positions are divided by this, and nearly all of it then lies within about 1.1 of the centre
+    /// frames the orbit: positions are divided by this, and seen face-on the form is then about 2 units tall
     pub radius: f64,
+    /// the form's own frame: screen-right, screen-up, and the direction it is thinnest in (toward the viewer).
+    /// Looking along the third axis shows the form open; looking across it would show it edge-on.
+    pub basis: [Vec3; 3],
     /// integration step giving a normalised step length of `STEP_LEN`
     pub dt: f64,
-    /// mean speed in units of the system's own time, to normalise colour
+    /// mean speed in units of the system's own time
     pub mean_speed: f64,
     /// samples spread along the orbit, to seed trails on the attractor
     pub orbit: Vec<Vec3>,
@@ -126,12 +129,94 @@ pub struct Calib {
 
 pub const STEP_LEN: f64 = 0.012;
 
+fn dot3(a: Vec3, b: Vec3) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+fn cross3(a: Vec3, b: Vec3) -> Vec3 {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+fn unit3(a: Vec3) -> Vec3 {
+    let l = dot3(a, a).sqrt().max(1e-300);
+    [a[0] / l, a[1] / l, a[2] / l]
+}
+
+/// eigenvectors of a symmetric 3x3 matrix (as columns of the result) and its eigenvalues, by Jacobi rotations
+fn eigen(mut a: [[f64; 3]; 3]) -> ([Vec3; 3], Vec3) {
+    let mut v = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    for _ in 0..24 {
+        for (p, q) in [(0, 1), (0, 2), (1, 2)] {
+            if a[p][q].abs() < 1e-300 {
+                continue;
+            }
+            let th = 0.5 * (2.0 * a[p][q]).atan2(a[q][q] - a[p][p]);
+            let (c, sn) = (th.cos(), th.sin());
+            for k in 0..3 {
+                let (x, y) = (a[k][p], a[k][q]);
+                a[k][p] = c * x - sn * y;
+                a[k][q] = sn * x + c * y;
+            }
+            for k in 0..3 {
+                let (x, y) = (a[p][k], a[q][k]);
+                a[p][k] = c * x - sn * y;
+                a[q][k] = sn * x + c * y;
+            }
+            for k in 0..3 {
+                let (x, y) = (v[k][p], v[k][q]);
+                v[k][p] = c * x - sn * y;
+                v[k][q] = sn * x + c * y;
+            }
+        }
+    }
+    ([[v[0][0], v[1][0], v[2][0]], [v[0][1], v[1][1], v[2][1]], [v[0][2], v[1][2], v[2][2]]], [a[0][0], a[1][1], a[2][2]])
+}
+
+/// The scale at which a cloud of points (in the form's own frame, centred) fills the picture without leaving it:
+/// the camera's own path is tried (it leans up to 45 degrees off the face-on axis, in every direction) and the form,
+/// at its most awkward, must still stand within 80% of the screen's height and 68% of its width (which also keeps
+/// the margins free for the annotations).
+pub fn fit(local: &[Vec3]) -> f64 {
+    let stride = (local.len() / 8000).max(1);
+    let mut buf: Vec<f64> = Vec::with_capacity(local.len() / stride + 1);
+    let mut worst = |r: f64| {
+        let (dist, p11, aspect) = (4.1, 1.0 / (19f64.to_radians()).tan(), 1.6);
+        let mut most: f64 = 0.0;
+        for lean in [0.30f64, 0.54, 0.78] {
+            for k in 0..8 {
+                let a = k as f64 * std::f64::consts::FRAC_PI_4;
+                let e = [lean.sin() * a.cos(), lean.sin() * a.sin(), lean.cos()];
+                let rt = unit3(cross3([-e[0], -e[1], -e[2]], [0.0, 1.0, 0.0]));
+                let u = cross3(rt, [-e[0], -e[1], -e[2]]);
+                buf.clear();
+                buf.extend(local.iter().step_by(stride).map(|q| {
+                    let w = [q[0] / r, q[1] / r, q[2] / r];
+                    let depth = (dist - dot3(w, e)).max(0.3);
+                    (dot3(w, u).abs() * p11 / depth / 0.80).max(dot3(w, rt).abs() * p11 / aspect / depth / 0.68)
+                }));
+                // the body of the form (97.5% of it) inside the frame; its rare far reaches (a Rössler spike) may run
+                // a little past the screen's edge at the worst moment rather than shrink everything else
+                let k = ((buf.len() as f64 * 0.975) as usize).min(buf.len() - 1);
+                let (_, body, rest) = buf.select_nth_unstable_by(k, |a, b| a.partial_cmp(b).unwrap());
+                let reach = rest.iter().fold(*body, |m, x| m.max(*x));
+                most = most.max(*body).max(reach / 1.45);
+            }
+        }
+        most
+    };
+    let far = local.iter().map(|q| dot3(*q, *q).sqrt()).fold(0.0, f64::max).max(1e-9);
+    let (mut lo, mut hi) = (far * 0.2, far * 4.0);
+    for _ in 0..22 {
+        let mid = 0.5 * (lo + hi);
+        if worst(mid) > 1.0 { lo = mid } else { hi = mid }
+    }
+    hi
+}
+
 pub fn calibrate(s: &System) -> Calib {
     let mut p = s.start;
     for _ in 0..6000 {
         p = rk4(s.f, p, s.dt0);
     }
-    let n = 40_000;
+    let n = 200_000;
     let mut pts = Vec::with_capacity(n);
     let mut path = 0.0;
     let mut prev = p;
@@ -141,23 +226,52 @@ pub fn calibrate(s: &System) -> Calib {
         prev = p;
         pts.push(p);
     }
-    // centre: halfway between the centroid (where the orbit spends its time) and the middle of its extent
-    let mut c = [0.0; 3];
+    let mut mean = [0.0; 3];
     for q in &pts {
         for i in 0..3 {
-            c[i] += q[i] / n as f64;
+            mean[i] += q[i] / n as f64;
         }
     }
-    for i in 0..3 {
-        let (lo, hi) = pts.iter().fold((f64::MAX, f64::MIN), |(lo, hi), q| (lo.min(q[i]), hi.max(q[i])));
-        c[i] = 0.5 * c[i] + 0.25 * (lo + hi);
+    // how the form lies: the direction in which the orbit varies least is the one to look along
+    let mut cov = [[0.0; 3]; 3];
+    for q in &pts {
+        for i in 0..3 {
+            for j in 0..3 {
+                cov[i][j] += (q[i] - mean[i]) * (q[j] - mean[j]) / n as f64;
+            }
+        }
     }
-    let mut d: Vec<f64> = pts.iter().map(|q| ((q[0] - c[0]).powi(2) + (q[1] - c[1]).powi(2) + (q[2] - c[2]).powi(2)).sqrt()).collect();
-    d.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    // the whole orbit has to fit on the screen from every side, so the far reaches decide the size
-    let radius = (d[(n as f64 * 0.97) as usize] / 1.12).max(d[(n as f64 * 0.999) as usize] / 1.35).max(d[n - 1] / 1.38).max(1e-6);
+    let (ev, lam) = eigen(cov);
+    let mut order = [0, 1, 2];
+    order.sort_by(|&a, &b| lam[b].partial_cmp(&lam[a]).unwrap());
+    let normal = unit3(ev[order[2]]);
+    // up: the system's own z axis where that makes sense (the Lorenz butterfly stands upright), else the form's
+    // second-longest direction, so the longest lies across the screen
+    let z = [0.0, 0.0, 1.0];
+    let zn = dot3(z, normal);
+    let mut up = if zn.abs() < 0.75 { unit3([z[0] - normal[0] * zn, z[1] - normal[1] * zn, z[2] - normal[2] * zn]) } else { unit3(ev[order[1]]) };
+    let mut right = unit3(cross3(up, normal));
+    // a form taller than it is wide is laid on its side: the screen is a landscape
+    let ext = |axis: Vec3| {
+        let mut d: Vec<f64> = pts.iter().map(|q| dot3([q[0] - mean[0], q[1] - mean[1], q[2] - mean[2]], axis)).collect();
+        d.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        (d[(n as f64 * 0.001) as usize], d[(n as f64 * 0.999) as usize])
+    };
+    let (mut eh, mut evv) = (ext(right), ext(up));
+    if (evv.1 - evv.0) > 1.25 * (eh.1 - eh.0) && zn.abs() >= 0.75 {
+        std::mem::swap(&mut up, &mut right);
+        right = unit3(cross3(up, normal));
+        eh = ext(right);
+        evv = ext(up);
+    }
+    // centre: the middle of the picture across and up, the centroid in depth
+    let (mh, mv) = (0.5 * (eh.0 + eh.1), 0.5 * (evv.0 + evv.1));
+    let c = [mean[0] + right[0] * mh + up[0] * mv, mean[1] + right[1] * mh + up[1] * mv, mean[2] + right[2] * mh + up[2] * mv];
+    // size: see `fit`
+    let local: Vec<Vec3> = pts.iter().step_by(16).map(|q| { let w = [q[0] - c[0], q[1] - c[1], q[2] - c[2]]; [dot3(w, right), dot3(w, up), dot3(w, normal)] }).collect();
+    let radius = fit(&local);
     let mean_speed = path / (n as f64 * s.dt0);
     let dt = (STEP_LEN * radius / mean_speed).clamp(s.dt0 * 0.25, s.dt0 * 3.0);
     let orbit = (0..512).map(|i| pts[i * (n / 512)]).collect();
-    Calib { center: c, radius, dt, mean_speed, orbit }
+    Calib { center: c, radius, basis: [right, up, normal], dt, mean_speed, orbit }
 }

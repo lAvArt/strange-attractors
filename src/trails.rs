@@ -15,7 +15,7 @@
 use crate::systems::{self, Calib, System, Vec3};
 
 /// steps over which a strand thins away before it is moved, and thickens again afterwards
-const RAMP: i16 = 18;
+const RAMP: i16 = 36;
 
 pub struct Trails {
     pub n: usize,
@@ -82,6 +82,8 @@ impl Trails {
         let cal = systems::calibrate(&sys);
         let m = m.clamp(1, n.max(1));
         let n = (n / m).max(1) * m;
+        // the renderer thins points by ring slot (every 2nd, 3rd, 4th): a ring whose length they all divide has no seam
+        let len = len.div_ceil(12).max(2) * 12;
         let groups = n / m;
         let mut rng = Rng(seed | 1);
         for _ in 0..8 {
@@ -113,9 +115,22 @@ impl Trails {
         let probe_d = cal.radius * 1e-8;
         let mut t = Trails { n, len, m, sys, cal, pos, coef, thick, state: vec![0; n], pitch: pitches, dir, probe: (cal_probe, [cal_probe[0] + probe_d, cal_probe[1], cal_probe[2]]), stretch: 0.0, stretch_time: 0.0, head: 0, steps: 0, ring: vec![[0.0; 4]; n * len] };
         // let every ribbon turn into the direction the flow stretches before anything is drawn
-        for _ in 0..600 {
+        let mut seen: Vec<Vec3> = Vec::new();
+        let skip = (n / 96).max(1);
+        for i in 0..900 {
             t.advance();
+            if i >= 300 && i % 6 == 0 {
+                for k in (0..n).step_by(skip) {
+                    let q = sub(t.pos[k], t.cal.center);
+                    seen.push([dot(q, t.cal.basis[0]), dot(q, t.cal.basis[1]), dot(q, t.cal.basis[2])]);
+                }
+            }
         }
+        // Ribbons have width, so where a system pulls its orbits onto the attractor only slowly (Chen-Lee) their
+        // strands ride wider loops than the single orbit the calibration followed. Frame what is actually drawn.
+        let wide = systems::fit(&seen);
+        // (where they ride much wider, they are still drifting outward when this is measured)
+        t.cal.radius = t.cal.radius.max(if wide > t.cal.radius * 1.3 { wide * 1.12 } else { wide });
         t.state.iter_mut().for_each(|s| *s = 0);
         // fill every slot with the starting points so unborn history is a zero-length (invisible) segment
         for slot in 0..len {
@@ -133,11 +148,12 @@ impl Trails {
         t
     }
 
-    /// world coordinates: centred, unit radius, the attractor's z axis pointing up
+    /// world coordinates: centred, scaled, and turned into the form's own frame (x across the screen, y up, z along
+    /// the direction the form is thinnest in)
     fn world(&self, p: Vec3) -> [f32; 4] {
         let c = &self.cal;
-        let r = c.radius;
-        [((p[0] - c.center[0]) / r) as f32, ((p[2] - c.center[2]) / r) as f32, (-(p[1] - c.center[1]) / r) as f32, 1.0]
+        let q = sub(p, c.center);
+        [(dot(q, c.basis[0]) / c.radius) as f32, (dot(q, c.basis[1]) / c.radius) as f32, (dot(q, c.basis[2]) / c.radius) as f32, 1.0]
     }
 
     /// one integration step for every strand, then hold each ribbon together
@@ -163,9 +179,9 @@ impl Trails {
                 self.state[k] = -RAMP;
             } else {
                 self.pos[k] = q;
-                // nudged off the attractor and leaving for good (the fit puts all of the orbit within 1.4 radii):
+                // nudged off the attractor and leaving for good (the fit puts all of the orbit within 2 radii):
                 // let go, thin out, and come back beside the others
-                if self.state[k] >= 0 && norm(sub(q, self.cal.center)) > self.cal.radius * 1.7 {
+                if self.state[k] >= 0 && norm(sub(q, self.cal.center)) > self.cal.radius * 2.4 {
                     self.state[k] = -1;
                 }
             }

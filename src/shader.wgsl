@@ -19,10 +19,12 @@ struct U {
     p2: vec4<f32>,    // camera distance, view units per pixel at depth 1, target height px, stride / spacing of this pass
     st: vec4<f32>,    // light's say in the tone (0..1), depth of field (px of blur per unit of depth), dissolve age, scatter
     st2: vec4<f32>,   // sparkle share, focus offset, dot mode (0 dust, 1 halftone, 2 dissolve), opacity
-    st3: vec4<f32>,   // the sheet's own tint (0: unseen, 1: solid), scanlines, each ribbon its own colour (0/1), sheet strip width
+    st3: vec4<f32>,   // the sheet's own tint (0: unseen, 1: solid; in the dot pass: how faint a covered dot gets), scanlines, each ribbon its own colour (0/1), sheet strip width
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var<storage, read> pts: array<vec4<f32>>;
+@group(0) @binding(2) var veil: texture_2d<f32>; // view depth and strength of the nearest sheet (soft looks)
+@group(0) @binding(3) var veil_samp: sampler;
 
 struct VOut {
     @builtin(position) pos: vec4<f32>,
@@ -129,7 +131,10 @@ fn vs_flow(@builtin(vertex_index) vi: u32, @builtin(instance_index) t: u32) -> V
     let fresh = u32(u.p1.y);
     let v = vi >> 1u;
     let stride = select(u32(u.p2.w), 1u, v < fresh);
-    let j = min(select(fresh + (v - fresh) * stride, v, v < fresh), len - 1u);
+    // the thinned part keeps the same points from frame to frame: it is chosen by ring slot, not by age, or the
+    // line would be redrawn through other points every time the head moves on
+    let first = fresh + ((u.ids.z + fresh) % stride);
+    let j = min(select(first + (v - fresh) * stride, v, v < fresh), len - 1u);
     let p = at(j, t);
     let a = at(max(j, stride) - stride, t).xyz;
     let b = at(min(j + stride, len - 1u), t).xyz;
@@ -189,7 +194,7 @@ fn fs_line(i: VOut) -> @location(0) vec4<f32> {
 struct DOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) q: vec2<f32>,     // offset from the centre, px
-    @location(1) rb: vec2<f32>,    // radius px, blur px
+    @location(1) rb: vec3<f32>,    // radius px, blur px, kind
     @location(2) col: vec4<f32>,
 };
 
@@ -203,7 +208,8 @@ fn vs_dot(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> D
     let every = max(u32(u.p2.w), 1u);
     let t = ii % n;
     let mode = u.st2.z;
-    let j = min((ii / n) * every, len - 2u);
+    // every `every`-th point, counted by ring slot (not by age), so a dot that is drawn stays drawn
+    let j = min((ii / n) * every + (u.ids.z % every), len - 2u);
     let p = at(j, t);
     let a = at(max(j, 1u) - 1u, t).xyz;
     let b = at(j + 1u, t).xyz;
@@ -240,42 +246,81 @@ fn vs_dot(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> D
         let tn = select(t - 1u, t + 1u, k + 1u < m);
         let acr = at(j, tn).xyz - p.xyz;
         let nw = cross(tw, normalize(acr + vec3<f32>(1e-20)));
-        pos += d * (h0 - 0.5) + (acr * (h1 - 0.5) * 2.0 + nw * (h2 - 0.5) * length(acr) * 1.6) * scatter;
+        // most grains keep close to their strand, so the strands read as silky filaments; a few stray far and
+        // fill the sheet between them
+        let hs = hash1(id * 5u + 9u);
+        let stray = mix(0.10, 1.0, hs * hs * hs * hs);
+        pos += d * (h0 - 0.5) + (acr * (h1 - 0.5) * 2.0 + nw * (h2 - 0.5) * length(acr) * 1.6) * (scatter * stray);
     }
     let pv = (u.view * vec4<f32>(pos, 1.0)).xyz;
     let w = -pv.z;
     let l = light_of(nv);
     var r = u.c2.w;
     var col = tone_of(l);
-    var alpha = abs(p.w) * age_fade(j) * u.p1.x * show * u.st2.w;
+    // a new dot swells in over a second or so: dots that appeared at full size would make the leading edge sparkle
+    let born = smoothstep(0.0, 40.0, f32(j));
+    var alpha = abs(p.w) * age_fade(j) * u.p1.x * show * u.st2.w * born;
+    var blur = 0.5;
+    var kind = 0.0;   // 0: a grain, 1: a disc of light out of focus, 2: a soft light
     if (mode > 0.5 && mode < 1.5) {
-        // halftone: the dot's size is the tone
-        r = u.c2.w * mix(1.0, 0.22 + 1.05 * l, u.st.x) * (0.55 + 0.45 * abs(p.w)) * (0.8 + 0.4 * h2);
+        // halftone: the dot's area is the tone (so the shading reads as a smooth ramp), and even in full shade a dot
+        // stays a small, clearly lit mark rather than going dark
+        r = u.c2.w * sqrt(mix(1.0, 0.10 + 0.95 * l, u.st.x)) * (0.75 + 0.25 * abs(p.w)) * (0.85 + 0.3 * h2);
         alpha *= step(0.0, p.w);
+        if (u.st3.x > 0.0) {
+            // behind a nearer sheet a dot is not cut off: it thins and dims, smoothly with how far behind it lies
+            // and with how much that sheet itself shows, and never vanishes
+            let cp = u.proj * vec4<f32>(pv, 1.0);
+            let uv = vec2<f32>(cp.x / cp.w * 0.5 + 0.5, 0.5 - cp.y / cp.w * 0.5);
+            let vl = textureSampleLevel(veil, veil_samp, uv, 0.0).rg;
+            let cover = smoothstep(0.035, 0.26, w - vl.x) * clamp(vl.y, 0.0, 1.0);
+            alpha *= mix(1.0, u.st3.x, cover);
+            r *= mix(1.0, 0.82, cover);
+        }
     } else {
-        // grains of different sizes; one in a few hundred is a sparkle in the accent colour
-        r = u.c2.w * (0.45 + 1.1 * h2 * h2);
-        alpha *= mix(1.0, 0.45 + 0.55 * l, u.st.x);
+        let coc = coc_of(w);
+        // grains of different sizes, lit by the sheet they ride on
+        r = u.c2.w * (0.4 + 1.3 * h2 * h2);
+        alpha *= mix(1.0, 0.3 + 0.7 * l, u.st.x);
+        let pick = hash1(id * 7u + 5u);
         if (h1 < u.st2.x) {
+            // one in a few hundred is a sparkle in the accent colour
             col = u.acc.rgb;
             r *= 1.7;
             alpha = min(alpha * 1.6, 1.0);
         }
+        if (u.st.y > 0.0) {
+            if (pick > 0.9993 && coc < 2.5) {
+                // a few soft lights in the focal plane
+                kind = 2.0;
+                col = u.c2.rgb;
+                blur = (3.0 + 5.0 * h0) * u.p2.z / 1080.0;
+                alpha = 0.5 * u.p1.x * age_fade(j);
+            } else if (pick > 0.984) {
+                // the brightest grains swell into discs of light as they leave the focal plane
+                let d = smoothstep(2.0, 4.5, coc);
+                kind = step(0.5, d);
+                blur = mix(0.5 + min(coc, 2.5), min(coc, 9.5 * u.p2.z / 1080.0), kind);
+                alpha = mix(alpha, (0.10 + 0.28 * h2) * u.p1.x * age_fade(j) * abs(p.w), kind);
+                col = mix(col, u.c2.rgb, 0.5 * kind);
+            } else {
+                // the rest blur a little and then fade out: no haze of half-seen grains
+                blur = 0.5 + min(coc, 2.2);
+                alpha *= 1.0 - 0.8 * smoothstep(1.5, 3.5, coc);
+            }
+        }
     }
-    var blur = 0.5 + coc_of(w);
-    // out of focus a grain spreads its light over a disc; big discs are capped and thinned so they cost little
-    let big = max(blur - 6.0, 0.0);
-    if (big > 0.0 && hash1(id * 7u + 5u) > 0.12) { alpha = 0.0; }
-    blur = min(blur, 22.0);
+    r *= 0.4 + 0.6 * born;
     let ok = step(1e-9, dl) * step(0.05, w);
-    let reach = (r + blur) * ok;
-    var cs = array<vec2<f32>, 4>(vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, 1.0));
+    let reach = (select(r, 0.0, kind > 0.5) + blur) * ok;
+    // one triangle around the dot: three vertices instead of a quad's four
+    var cs = array<vec2<f32>, 3>(vec2<f32>(-1.7321, -1.0), vec2<f32>(1.7321, -1.0), vec2<f32>(0.0, 2.0));
     let c = cs[vi] * reach;
     o.pos = u.proj * vec4<f32>(pv + vec3<f32>(c * (w * u.p2.y), 0.0), 1.0);
     o.q = c;
-    o.rb = vec2<f32>(r, blur);
+    o.rb = vec3<f32>(r, blur, kind);
     let fg = fog_of(w);
-    o.col = vec4<f32>(mix(col, u.fog.rgb, fg), alpha * ok * (1.0 - 0.55 * fg) * select(1.0, 7.0, big > 0.0));
+    o.col = vec4<f32>(mix(col, u.fog.rgb, fg), alpha * ok * (1.0 - 0.55 * fg));
     return o;
 }
 
@@ -283,9 +328,18 @@ fn vs_dot(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> D
 fn fs_dot(i: DOut) -> @location(0) vec4<f32> {
     let r = i.rb.x;
     let b = i.rb.y;
-    // a disc of radius r under a blur of radius b: the same ramp as a line, with the light spread over the area
-    let peak = min(1.0, (r * r) / (b * b));
-    let cov = clamp((r + b - length(i.q)) / (2.0 * b), 0.0, 1.0) * peak;
+    let d = length(i.q);
+    var cov = 0.0;
+    if (i.rb.z > 1.5) {
+        // a soft light: brightest in the middle, gone by its edge
+        cov = exp(-4.5 * d * d / (b * b)) * step(d, b);
+    } else if (i.rb.z > 0.5) {
+        // a disc out of focus: even, a touch brighter at the rim, with a crisp edge
+        cov = clamp((b - d) / 1.3, 0.0, 1.0) * (0.72 + 0.28 * smoothstep(0.55 * b, b, d));
+    } else {
+        // a disc of radius r under a blur of radius b: the same ramp as a line, with the light spread over the area
+        cov = clamp((r + b - d) / (2.0 * b), 0.0, 1.0) * min(1.0, (r * r) / (b * b));
+    }
     let a = min(cov * i.col.a, 1.0) * scan(i.pos.y);
     return vec4<f32>(i.col.rgb * a, a);
 }
@@ -293,6 +347,7 @@ fn fs_dot(i: DOut) -> @location(0) vec4<f32> {
 struct SOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) col: vec4<f32>,
+    @location(1) vw: vec2<f32>,   // view depth, how much this sheet covers what is behind it
 };
 
 // the sheet itself: strips from strand to strand. It writes depth, which is what makes a near fold hide a far one,
@@ -309,7 +364,9 @@ fn vs_sheet(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) ->
     let k = (ii % per) * wide;
     let g = ii / per;
     let t = g * m + min(k + (vi & 1u) * wide, m - 1u);
-    let j = min((vi >> 1u) * stride, len - 1u);
+    // the newest point, then every `stride`-th by ring slot: the same points every frame
+    let v = vi >> 1u;
+    let j = min(select((v - 1u) * stride + (u.ids.z % stride), 0u, v == 0u), len - 1u);
     let p = at(j, t);
     var o: SOut;
     let pv0 = (u.view * vec4<f32>(p.xyz, 1.0)).xyz;
@@ -328,6 +385,8 @@ fn vs_sheet(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) ->
     if (u.st3.z > 0.5) { tone = ribbon_tone(g, l); }
     let alpha = u.st3.x * mix(fade * (1.0 - 0.6 * fg), 1.0, step(0.999, u.st3.x)) * u.p1.x;
     o.col = vec4<f32>(mix(tone, u.fog.rgb, fg * step(u.st3.x, 0.999)), alpha);
+    // a sheet covers as much as it shows: where its own marks are faint (in shade, at the tail) it hides little
+    o.vw = vec2<f32>(w, clamp(0.15 + 0.95 * l, 0.0, 1.0) * fade * u.p1.x);
     // where its lines have mostly faded the sheet stops hiding things: those vertices go beyond the far plane, and
     // clipping cuts the strip cleanly between them and the last solid ones
     if (a < 0.5) { o.pos.z = o.pos.w * 2.0; }
@@ -338,4 +397,9 @@ fn vs_sheet(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) ->
 fn fs_sheet(i: SOut) -> @location(0) vec4<f32> {
     let a = i.col.a * mix(1.0, scan(i.pos.y), step(i.col.a, 0.999));
     return vec4<f32>(i.col.rgb * a, a);
+}
+
+@fragment
+fn fs_veil(i: SOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(i.vw, 0.0, 0.0);
 }

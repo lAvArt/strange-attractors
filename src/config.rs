@@ -185,6 +185,9 @@ pub struct Look {
     pub dot_every: u32,
     /// near folds hide far ones
     pub sheet: bool,
+    /// above 0, nothing is ever cut off behind a sheet: marks behind one thin and dim, smoothly, down to this share of
+    /// their strength (for the looks made of dots, where a hard cut reads as a dark band)
+    pub soft: f32,
     /// how much of its own tone the sheet lays under the lines (0: none, it only hides; 1: a solid surface)
     pub wash: f32,
     /// every ribbon in one of the three tones, flat-shaded, instead of tone following the light
@@ -256,8 +259,8 @@ pub fn theme_stamp() -> String {
 }
 
 pub const STYLES: &[&str] = &["weave", "contour", "stipple", "dust", "80s", "90s"];
-/// what `"preset": "theme"` draws
-const DEFAULT_STYLE: &str = "weave";
+/// what `"preset": "theme"` draws: (wallpaper, screensaver)
+const DEFAULT_STYLE: (&str, &str) = ("stipple", "dust");
 
 /// The colours of a look: the ground, three tones for the form, an accent.
 struct Pal {
@@ -332,8 +335,9 @@ impl Look {
         }
     }
 
-    /// the name of the look a preset draws ("theme" and anything unknown: the default one)
-    pub fn style_name(preset: &str) -> &'static str {
+    /// the name of the look a preset draws. "theme" (and anything unknown) is the default: the stipple for the
+    /// wallpaper, the dust for the screensaver.
+    pub fn style_name(preset: &str, wall: bool) -> &'static str {
         match preset {
             "weave" | "mesh" => "weave",
             "contour" => "contour",
@@ -341,12 +345,12 @@ impl Look {
             "dust" => "dust",
             "80s" | "vector" => "80s",
             "90s" | "vga" => "90s",
-            _ => DEFAULT_STYLE,
+            _ => if wall { DEFAULT_STYLE.0 } else { DEFAULT_STYLE.1 },
         }
     }
 
     pub fn resolve(cfg: &Config) -> Look {
-        let name = Look::style_name(&cfg.preset);
+        let name = Look::style_name(&cfg.preset, cfg.wall);
         let period = name == "80s" || name == "90s";
         let original = cfg.palette == "original" || (period && cfg.palette != "theme");
         let pal = |tinted: bool, own: Pal| if original { own } else { theme_palette(tinted) };
@@ -355,7 +359,7 @@ impl Look {
             name,
             bg_top: p.bg_top, bg_bot: p.bg_bot, c: p.c, accent: p.accent, text: p.text, text_hi: p.text_hi, g0: p.g0, g1: p.g1, vignette: p.vignette,
             line: 0.0, cross: 0.0, cross_every: 1, dot: 0.0, dots: Dots::Dust, dot_every: 1,
-            sheet: true, wash: 0.0, ribbon_colours: false, scan: 0.0, ground: 0, pixel: 0, quant: 0.0, chunk: 1,
+            sheet: true, soft: 0.0, wash: 0.0, ribbon_colours: false, scan: 0.0, ground: 0, pixel: 0, quant: 0.0, chunk: 1,
             shade: 0.8, dof: 0.0, focus: 0.0, dissolve: 2.0, scatter: 0.0, sparkle: 0.0, fog: 0.5, age_pow: 0.45, opacity: 1.0,
             strands: 24, pitch: 0.011, trails: (720, 1200), length: (400, 480), logo_tint: None,
         };
@@ -372,8 +376,8 @@ impl Look {
             },
             // a halftone: dots on the lattice of strands and steps, sized by the light
             "stipple" => Look {
-                dot: 1.0, dots: Dots::Halftone, shade: 1.0, fog: 0.4, age_pow: 0.5,
-                strands: 40, pitch: 0.0105, trails: (800, 1200), length: (340, 420),
+                dot: 1.1, dots: Dots::Halftone, soft: 0.2, shade: 1.0, fog: 0.4, age_pow: 0.5,
+                strands: 40, pitch: 0.0115, trails: (600, 1000), length: (300, 396),
                 ..base(pal(false, Pal {
                     bg_top: hex("#2b2a29"), bg_bot: hex("#232221"),
                     c: [hex("#b9b6b0"), hex("#f1efe9"), hex("#ffffff")],
@@ -382,8 +386,8 @@ impl Look {
             },
             // grains scattered through the sheets, with a shallow depth of field
             "dust" => Look {
-                dot: 0.72, dots: Dots::Dust, dot_every: 2, sheet: false, shade: 0.6, dof: 3.2, focus: -0.35, scatter: 1.0, sparkle: 0.0025, fog: 0.3, opacity: 0.8,
-                strands: 24, pitch: 0.012, trails: (840, 1200), length: (400, 460),
+                dot: 0.7, dots: Dots::Dust, sheet: false, shade: 0.7, dof: 5.0, focus: -0.25, scatter: 1.0, sparkle: 0.0025, fog: 0.3, age_pow: 0.35, opacity: 0.9,
+                strands: 16, pitch: 0.016, trails: (560, 1040), length: (276, 336),
                 ..base(pal(false, Pal {
                     bg_top: hex("#030304"), bg_bot: hex("#000000"),
                     c: [hex("#8f9198"), hex("#e9eaee"), hex("#ffffff")],

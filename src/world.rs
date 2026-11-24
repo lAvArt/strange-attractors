@@ -40,6 +40,16 @@ pub struct World {
     acc: f32,
     seed: u64,
     cycling: bool,
+    /// where on its path the camera starts: different each run
+    cam_phase: f32,
+    /// hold the camera still (the flicker test: with the camera held, nothing that is drawn should change at all
+    /// from one frame to the next except the growing heads and fading tails)
+    pub hold_camera: bool,
+    held: f32,
+    /// how far the camera has stepped back to keep the whole form in the picture (1: not at all), and where that is heading
+    reach: f32,
+    reach_goal: f32,
+    reach_poll: f32,
 }
 
 impl World {
@@ -50,7 +60,7 @@ impl World {
         let order: Vec<usize> = (0..systems::ALL.len()).map(|i| (first + i) % systems::ALL.len()).collect();
         let look = Look::resolve(cfg);
         let trails = World::make_trails(&look, cfg, order[0], seed, true);
-        World { cfg: cfg.clone(), from_look: look.clone(), target_look: look.clone(), blend: 1.0, theme_stamp: crate::config::theme_stamp(), theme_poll: 0.0, look, trails, logo: logo::load(&cfg.logo), t: 0.0, fade: 1.0, epoch: 0, order, idx: 0, since: 0.0, phase: Phase::Run, acc: 0.0, seed, cycling }
+        World { cfg: cfg.clone(), from_look: look.clone(), target_look: look.clone(), blend: 1.0, theme_stamp: crate::config::theme_stamp(), theme_poll: 0.0, look, trails, logo: logo::load(&cfg.logo), t: 0.0, fade: 1.0, epoch: 0, order, idx: 0, since: 0.0, phase: Phase::Run, acc: 0.0, seed, cycling, cam_phase: (seed % 1000) as f32, hold_camera: false, held: 0.0, reach: 1.0, reach_goal: 1.0, reach_poll: 0.0 }
     }
 
     fn make_trails(look: &Look, cfg: &Config, sys: usize, seed: u64, spread: bool) -> Trails {
@@ -83,6 +93,29 @@ impl World {
         }
     }
 
+    /// The fit is made before anything is drawn, from where the strands were then. Ribbons can ride wider later (and a
+    /// rare far loop can come round), so twice a second look at where the strands' heads are now, and let the camera
+    /// ease back when they would leave the picture and, slowly, forward again when they no longer would.
+    fn keep_in_frame(&mut self, dt: f32) {
+        self.reach_poll += dt;
+        if self.reach_poll >= 0.5 {
+            self.reach_poll = 0.0;
+            let tr = &self.trails;
+            let mut need = 1.0f32;
+            for p in &tr.ring[tr.head * tr.n..(tr.head + 1) * tr.n] {
+                if p[3] != 0.0 {
+                    need = need.max(p[1].abs() / 1.2).max(p[0].abs() / 1.85).max((p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt() / 1.7);
+                }
+            }
+            // what was far half a minute ago still counts: its trail is on screen for a while, and it will be back
+            self.reach_goal = need.min(2.5).max(1.0 + (self.reach_goal - 1.0) * 0.985);
+        }
+        if !self.hold_camera {
+            let rate = if self.reach_goal > self.reach { 0.9 } else { 0.08 };
+            self.reach += (self.reach_goal - self.reach) * (1.0 - (-dt * rate).exp());
+        }
+    }
+
     /// nothing is fading: neither one attractor into the next nor one theme into another
     pub fn settled(&self) -> bool {
         self.fade >= 1.0 && self.blend >= 1.0
@@ -100,6 +133,10 @@ impl World {
     pub fn update(&mut self, dt: f32) {
         let dt = dt.clamp(0.0, 0.25);
         self.t += dt;
+        self.keep_in_frame(dt);
+        if !self.hold_camera {
+            self.held = self.t;
+        }
         self.since += dt;
         self.acc += dt * STEPS_PER_SEC * self.cfg.speed;
         let n = (self.acc as usize).min(64);
@@ -140,10 +177,13 @@ impl World {
         }
     }
 
-    /// the slowly orbiting camera's angles (radians) and distance
+    /// The camera's place: its lean away from the form's face-on axis, the direction of that lean (both radians),
+    /// and its distance. It never orbits the form: it circles the face-on view at a lean of 17 to 45 degrees, so the
+    /// form turns enough to show its depth and is never seen edge-on.
     pub fn orbit(&self) -> (f32, f32, f32) {
-        let t = self.t;
-        (t * 0.055, 0.30 + 0.20 * (t * 0.037).sin(), 4.1 / self.cfg.zoom.max(0.2) * (1.0 + 0.035 * (t * 0.021).sin()))
+        let t = if self.hold_camera { self.held } else { self.t } + self.cam_phase;
+        // slowly: a field of fine dots that slides more than a fraction of a pixel per frame shimmers
+        (t * 0.021, 0.54 + 0.24 * (t * 0.013).sin(), 4.1 * self.reach / self.cfg.zoom.max(0.2) * (1.0 + 0.03 * (t * 0.009).sin()))
     }
 
     /// how far the picture is slid sideways and up, in units of half the screen
@@ -153,8 +193,8 @@ impl World {
 
     /// view and projection of the camera, and its distance
     pub fn camera(&self, aspect: f32) -> (Mat4, Mat4, f32) {
-        let (yaw, pitch, dist) = self.orbit();
-        let eye = Vec3::new(pitch.cos() * yaw.sin(), pitch.sin(), pitch.cos() * yaw.cos()) * dist;
+        let (around, lean, dist) = self.orbit();
+        let eye = Vec3::new(lean.sin() * around.cos(), lean.sin() * around.sin(), lean.cos()) * dist;
         let view = Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y);
         let fov = 38f32.to_radians();
         // a tight depth range around the form, so a 16-bit depth buffer is plenty
