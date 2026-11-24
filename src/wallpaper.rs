@@ -218,7 +218,7 @@ impl App {
     fn setup_gfx(&mut self, i: usize) {
         let (w, h, scale) = {
             let o = &self.outs[i];
-            // logical pixels unless `hidpi`: the compositor scales a 1x buffer up, and the fill cost is a quarter on a 2x panel
+            // native pixels unless `hidpi` is off: hairlines do not survive the compositor scaling a 1x buffer up
             let k = if self.cfg.hidpi { o.scale } else { 1 };
             (o.size.0 * k as u32, o.size.1 * k as u32, k)
         };

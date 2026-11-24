@@ -1,7 +1,7 @@
 #!/bin/bash
 # Start the Attractor screensaver on every monitor (one fullscreen window each), unless a screensaver is already
 # up or the session is locked. Run by the plugin service on idle; also fine to bind to a key for a preview.
-# Extra arguments go to attractor itself, e.g. `attractor-launch --system aizawa --preset neon`.
+# Extra arguments go to attractor itself, e.g. `attractor-launch --system aizawa --preset dust`.
 set -u
 
 count() { hyprctl clients -j 2>/dev/null | jq '[.[] | select(.class == "org.omarchy.screensaver")] | length' 2>/dev/null || echo 0; }

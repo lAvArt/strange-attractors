@@ -7,6 +7,7 @@ mod render;
 mod saver;
 mod shot;
 mod systems;
+mod text;
 mod trails;
 mod wallpaper;
 mod world;
@@ -21,9 +22,15 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "attractor [--wallpaper | --windowed | --keep] [--system NAME|cycle] [--preset theme|matte|pale|graphite|neon|lavart|deformation|ink]\n\
+            "attractor [--wallpaper | --windowed | --keep] [--system NAME|cycle] [--preset theme|weave|contour|stipple|dust|80s|90s] [--palette auto|theme|original]\n\
              \x20         [--logo none|twinise|omarchy|FILE.svg] [--fps N] [--scale F] [--shot out.png [--size WxH] [--secs N]] [--list]"
         );
+        return;
+    }
+    if args.iter().any(|a| a == "--looks") {
+        for s in config::STYLES {
+            println!("{s}");
+        }
         return;
     }
     if args.iter().any(|a| a == "--list") {
@@ -36,11 +43,13 @@ fn main() {
     let mut cfg = Config::load(mode);
     if let Some(v) = arg(&args, "--system") { cfg.system = v.into() }
     if let Some(v) = arg(&args, "--preset") { cfg.preset = v.into() }
+    if let Some(v) = arg(&args, "--palette") { cfg.palette = v.into() }
+    if args.iter().any(|a| a == "--no-annotations") { cfg.annotations = false }
     if let Some(v) = arg(&args, "--logo") { cfg.logo = v.into() }
     if let Some(v) = arg(&args, "--fps").and_then(|v| v.parse().ok()) { cfg.fps = v }
     if let Some(v) = arg(&args, "--scale").and_then(|v| v.parse().ok()) { cfg.render_scale = Some(v) }
     gpu::prepare_env(&cfg);
-    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(7);
+    let seed = arg(&args, "--seed").and_then(|v| v.parse().ok()).unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(7));
 
     if let Some(n) = arg(&args, "--bench").and_then(|v| v.parse::<u32>().ok()) {
         let size = arg(&args, "--size").and_then(|v| v.split_once('x')).and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))).unwrap_or((3200, 2000));

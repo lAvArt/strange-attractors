@@ -58,22 +58,14 @@ pub fn surface_format(caps: &wgpu::SurfaceCapabilities) -> wgpu::TextureFormat {
     caps.formats.iter().copied().find(|f| matches!(f, wgpu::TextureFormat::Bgra8UnormSrgb | wgpu::TextureFormat::Rgba8UnormSrgb)).unwrap_or(caps.formats[0])
 }
 
-/// How big the scene renders relative to its output. The screensaver is full size up to ~4 MP and 75% beyond;
-/// the wallpaper is sized by its own rule.
+/// How big the scene renders relative to its output: full size, since fine lines do not survive being scaled up,
+/// unless `render_scale` says otherwise.
 pub fn render_scale(cfg: &Config, mode: Mode, w: u32, h: u32) -> f32 {
     if let Some(s) = cfg.render_scale {
         return s.clamp(0.3, 1.0);
     }
-    match mode {
-        // the wallpaper is a soft, slow backdrop: full size up to ~2.6 MP (a 1080p panel, or a 2x panel's logical size),
-        // half size beyond that
-        Mode::Wallpaper => {
-            if w as u64 * h as u64 > 2_600_000 { 0.5 } else { 1.0 }
-        }
-        Mode::Saver => {
-            if w as u64 * h as u64 > 4_200_000 { 0.75 } else { 1.0 }
-        }
-    }
+    let _ = (mode, w, h);
+    1.0
 }
 
 /// Plugged in (or a machine without a battery).

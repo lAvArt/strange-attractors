@@ -49,16 +49,18 @@ impl World {
         let first = systems::find(&cfg.system).unwrap_or((seed as usize >> 3) % systems::ALL.len());
         let order: Vec<usize> = (0..systems::ALL.len()).map(|i| (first + i) % systems::ALL.len()).collect();
         let look = Look::resolve(cfg);
-        let trails = Trails::new(systems::ALL[order[0]], cfg.trails, cfg.length, seed, true);
+        let trails = World::make_trails(&look, cfg, order[0], seed, true);
         World { cfg: cfg.clone(), from_look: look.clone(), target_look: look.clone(), blend: 1.0, theme_stamp: crate::config::theme_stamp(), theme_poll: 0.0, look, trails, logo: logo::load(&cfg.logo), t: 0.0, fade: 1.0, epoch: 0, order, idx: 0, since: 0.0, phase: Phase::Run, acc: 0.0, seed, cycling }
+    }
+
+    fn make_trails(look: &Look, cfg: &Config, sys: usize, seed: u64, spread: bool) -> Trails {
+        let (n, len) = if cfg.wall { (look.trails.0, look.length.0) } else { (look.trails.1, look.length.1) };
+        Trails::new(systems::ALL[sys], n, len, look.strands, look.pitch as f64, seed, spread)
     }
 
     /// With the `theme` look, notice when the system theme changes (checked once a second, a single stat call) and
     /// crossfade to the new colours over a moment. Call it on every tick, even while nothing is drawn.
     pub fn poll_theme(&mut self, dt: f32) {
-        if self.cfg.preset != "theme" {
-            return;
-        }
         if self.blend < 1.0 {
             self.blend = (self.blend + dt / 1.6).min(1.0);
             let t = self.blend * self.blend * (3.0 - 2.0 * self.blend);
@@ -79,6 +81,16 @@ impl World {
                 eprintln!("attractor: theme changed, blending to the new colours");
             }
         }
+    }
+
+    /// nothing is fading: neither one attractor into the next nor one theme into another
+    pub fn settled(&self) -> bool {
+        self.fade >= 1.0 && self.blend >= 1.0
+    }
+
+    /// which attractor of the rotation is running: (index, count)
+    pub fn system_index(&self) -> (usize, usize) {
+        (self.order[self.idx], systems::ALL.len())
     }
 
     pub fn system_name(&self) -> &'static str {
@@ -108,7 +120,7 @@ impl World {
                     self.idx = (self.idx + 1) % self.order.len();
                     self.seed = self.seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                     // the next attractor is born as a point and grows out of it
-                    self.trails = Trails::new(systems::ALL[self.order[self.idx]], self.cfg.trails, self.cfg.length, self.seed, false);
+                    self.trails = World::make_trails(&self.look, &self.cfg, self.order[self.idx], self.seed, false);
                     self.epoch += 1;
                     self.phase = Phase::In(0.0);
                 } else {
@@ -128,19 +140,28 @@ impl World {
         }
     }
 
-    /// view-projection of the slowly orbiting camera
-    pub fn camera(&self, aspect: f32) -> (Mat4, f32) {
+    /// the slowly orbiting camera's angles (radians) and distance
+    pub fn orbit(&self) -> (f32, f32, f32) {
         let t = self.t;
-        let yaw = t * 0.055;
-        let pitch = 0.30 + 0.20 * (t * 0.037).sin();
-        let dist = 4.1 / self.cfg.zoom.max(0.2) * (1.0 + 0.035 * (t * 0.021).sin());
+        (t * 0.055, 0.30 + 0.20 * (t * 0.037).sin(), 4.1 / self.cfg.zoom.max(0.2) * (1.0 + 0.035 * (t * 0.021).sin()))
+    }
+
+    /// how far the picture is slid sideways and up, in units of half the screen
+    pub fn shift(&self) -> (f32, f32) {
+        (self.cfg.shift_x.unwrap_or(if self.logo.is_some() { -0.3 } else { 0.0 }), self.cfg.shift_y)
+    }
+
+    /// view and projection of the camera, and its distance
+    pub fn camera(&self, aspect: f32) -> (Mat4, Mat4, f32) {
+        let (yaw, pitch, dist) = self.orbit();
         let eye = Vec3::new(pitch.cos() * yaw.sin(), pitch.sin(), pitch.cos() * yaw.cos()) * dist;
         let view = Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y);
         let fov = 38f32.to_radians();
-        let proj = Mat4::perspective_rh(fov, aspect, 0.2, 40.0);
+        // a tight depth range around the form, so a 16-bit depth buffer is plenty
+        let proj = Mat4::perspective_rh(fov, aspect, (dist - 3.2).max(0.2), dist + 3.2);
         // slide the picture in screen space (added to clip x/y in proportion to w), to leave room for the logo
-        let dx = self.cfg.shift_x.unwrap_or(if self.logo.is_some() { -0.3 } else { 0.0 });
-        let shift = Mat4::from_cols(Vec4::X, Vec4::Y, Vec4::Z, Vec4::new(dx, self.cfg.shift_y, 0.0, 1.0));
-        (shift * proj * view, dist)
+        let (dx, dy) = self.shift();
+        let shift = Mat4::from_cols(Vec4::X, Vec4::Y, Vec4::Z, Vec4::new(dx, dy, 0.0, 1.0));
+        (view, shift * proj, dist)
     }
 }

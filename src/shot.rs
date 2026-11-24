@@ -87,16 +87,17 @@ pub fn bench(cfg: &Config, mode: Mode, size: (u32, u32), frames: u32, seed: u64)
     }
     let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0 / frames as f64;
     println!(
-        "{:>9} {:>9} {}x{} @{:.0}%  {:>6.2} ms/frame  (sim {:.2} ms, gpu+submit {:.2} ms)  -> {} trails x {} points",
+        "{:>9} {:>9} {}x{} @{:.0}%  {:>6.2} ms/frame  (sim {:.2} ms, gpu+submit {:.2} ms)  -> {} strands x {} points, lyapunov {:.3}",
         world.system_name(),
-        cfg.preset,
+        world.look.name,
         size.0,
         size.1,
         scale * 100.0,
         ms(total),
         ms(cpu_sim),
         ms(total) - ms(cpu_sim),
-        cfg.trails,
-        cfg.length
+        world.trails.n,
+        world.trails.len,
+        world.trails.lyapunov()
     );
 }
