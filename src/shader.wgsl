@@ -13,7 +13,7 @@ struct U {
     c1: vec4<f32>,    // tone in light; w: cross-line half width, px
     c2: vec4<f32>,    // highlight / accent; w: dot radius, px
     fog: vec4<f32>,   // the ground colour far things sink into; w: how much
-    acc: vec4<f32>,   // sparkles
+    acc: vec4<f32>,   // sparkles; w: how much the marks are drawn as on paper (0: clean)
     ids: vec4<u32>,   // n strands, ring length, head slot, strands per ribbon
     p1: vec4<f32>,    // fade, points drawn one by one before every other is skipped, time, tail power
     p2: vec4<f32>,    // camera distance, view units per pixel at depth 1, target height px, stride / spacing of this pass
@@ -37,6 +37,31 @@ fn hash1(x: u32) -> f32 {
     h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u;
     h = (h >> 22u) ^ h;
     return f32(h) / 4294967295.0;
+}
+
+
+fn pnoise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let s = f * f * (3.0 - 2.0 * f);
+    let a = fract(sin(dot(i, vec2<f32>(127.1, 311.7))) * 43758.5453);
+    let b = fract(sin(dot(i + vec2<f32>(1.0, 0.0), vec2<f32>(127.1, 311.7))) * 43758.5453);
+    let c = fract(sin(dot(i + vec2<f32>(0.0, 1.0), vec2<f32>(127.1, 311.7))) * 43758.5453);
+    let d = fract(sin(dot(i + vec2<f32>(1.0, 1.0), vec2<f32>(127.1, 311.7))) * 43758.5453);
+    return mix(mix(a, b, s.x), mix(c, d, s.x), s.y);
+}
+
+// the paper's tooth at a pixel, 0 (a hollow) .. 1 (a peak): long fibres lying across, and a finer felt. It is a
+// function of the place on the screen alone, so like real paper it never moves; marks slide over it.
+fn paper(xy: vec2<f32>, k: f32) -> f32 {
+    let q = xy / k;
+    return 0.6 * pnoise(q * vec2<f32>(0.17, 0.4)) + 0.4 * pnoise(q * 0.55 + vec2<f32>(31.0, 17.0));
+}
+
+// pigment dragged over paper catches on the peaks of its tooth and skips the hollows
+fn drag(xy: vec2<f32>) -> f32 {
+    if (u.acc.w <= 0.0) { return 1.0; }
+    return mix(1.0, 0.5 + 0.75 * paper(xy, u.p2.z / 2000.0), u.acc.w);
 }
 
 // the dark gaps between the lines of a picture tube, two logical pixels apart
@@ -148,7 +173,10 @@ fn vs_flow(@builtin(vertex_index) vi: u32, @builtin(instance_index) t: u32) -> V
     let age = f32(j) / f32(len - 1u);
     // past the dissolve age the lines give way to dots
     let keep = 1.0 - smoothstep(u.st.z - 0.12, u.st.z + 0.06, age);
-    let alpha = wt * age_fade(j) * u.p1.x * keep * mix(1.0, 0.62 + 0.38 * l, u.st.x) * u.st2.w;
+    // the hand's pressure rises and falls along a stroke: tied to the points themselves (five swells round the ring),
+    // so it travels with the stroke and never changes under it
+    let press = mix(1.0, 0.72 + 0.34 * sin(f32(slot_of(j)) * (31.415927 / f32(len)) + hash1(t * 5u + 2u) * 6.2831853), u.acc.w);
+    let alpha = wt * age_fade(j) * u.p1.x * keep * mix(1.0, 0.62 + 0.38 * l, u.st.x) * u.st2.w * press;
     return widen(p.xyz, a, b, side, u.c0.w * (0.5 + 0.75 * wt), tone_of(l), alpha);
 }
 
@@ -189,7 +217,7 @@ fn vs_cross(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) ->
 fn fs_line(i: VOut) -> @location(0) vec4<f32> {
     // a line of half width r under a box of half width b: full where the box fits inside, a ramp across the edge
     let cov = clamp((i.d.y + i.d.z - abs(i.d.x)) / (2.0 * i.d.z), 0.0, min(1.0, i.d.y / i.d.z));
-    let a = cov * i.col.a * scan(i.pos.y);
+    let a = cov * i.col.a * scan(i.pos.y) * drag(i.pos.xy);
     return vec4<f32>(i.col.rgb * a, a);
 }
 
@@ -346,12 +374,14 @@ fn fs_dot(i: DOut) -> @location(0) vec4<f32> {
         cov = exp(-4.5 * d * d / (b * b)) * step(d, b);
     } else if (i.rb.z > 0.5) {
         // a disc out of focus: even, a touch brighter at the rim, with a crisp edge
-        cov = clamp((b - d) / max(i.rb.w * b, 1.3), 0.0, 1.0) * (0.8 + 0.2 * smoothstep(0.5 * b, b, d));
+        // (on paper: a wet bloom, its pigment pooled toward the edge)
+        let pool = 0.2 + 0.25 * u.acc.w;
+        cov = clamp((b - d) / max(i.rb.w * b, 1.3), 0.0, 1.0) * (1.0 - pool + pool * smoothstep(0.45 * b, b, d));
     } else {
         // a disc of radius r under a blur of radius b: the same ramp as a line, with the light spread over the area
         cov = clamp((r + b - d) / (2.0 * b), 0.0, 1.0) * min(1.0, (r * r) / (b * b));
     }
-    let a = min(cov * i.col.a, 1.0) * scan(i.pos.y);
+    let a = min(cov * i.col.a, 1.0) * scan(i.pos.y) * mix(1.0, drag(i.pos.xy), step(i.rb.z, 0.5));
     return vec4<f32>(i.col.rgb * a, a);
 }
 

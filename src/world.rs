@@ -285,7 +285,8 @@ impl World {
 
     /// how far the picture is slid sideways and up, in units of half the screen
     pub fn shift(&self) -> (f32, f32) {
-        (self.cfg.shift_x.unwrap_or(if self.logo.is_some() { -0.3 } else { 0.0 }), self.cfg.shift_y)
+        // with captions down the left, the form sits a little right of centre, as a plate would be composed
+        (self.cfg.shift_x.unwrap_or(if self.logo.is_some() { -0.3 } else if self.cfg.annotations { 0.07 } else { 0.0 }), self.cfg.shift_y)
     }
 
     /// view and projection of the camera, and its distance

@@ -47,6 +47,7 @@ fn main() {
     if args.iter().any(|a| a == "--no-annotations") { cfg.annotations = false }
     if args.iter().any(|a| a == "--no-lines") { cfg.lines = Some(false) }
     if args.iter().any(|a| a == "--no-trackers") { cfg.trackers = false }
+    if let Some(v) = arg(&args, "--canvas").and_then(|v| v.parse().ok()) { cfg.canvas = v }
     if let Some(v) = arg(&args, "--orbit").and_then(|v| v.parse().ok()) { cfg.orbit = v }
     if let Some(v) = arg(&args, "--logo") { cfg.logo = v.into() }
     if let Some(v) = arg(&args, "--fps").and_then(|v| v.parse().ok()) { cfg.fps = v }

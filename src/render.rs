@@ -463,7 +463,7 @@ impl Renderer {
             c1: b4(look.c[1], look.cross * px * 0.5),
             c2: b4(look.c[2], look.dot * px),
             fog: b4(fogc, look.fog),
-            acc: b4(look.accent, 0.0),
+            acc: b4(look.accent, look.canvas),
             ids: [n, len, world.trails.head as u32, m],
             p1: [world.fade, fresh as f32, world.t, look.age_pow],
             // view units per pixel at depth 1: 2 / (height * proj[1][1])
@@ -504,7 +504,7 @@ impl Renderer {
             // bg0.w: the logo keeps its own SVG colours
             bg0: b4(look.bg_top, look.logo_tint.is_none() as u32 as f32),
             bg1: b4(look.bg_bot, 0.0),
-            ex: [look.ground as f32, 0.0, style, sh],
+            ex: [look.ground as f32, look.canvas, style, sh],
             // a wide logo is sized by its width, so it never outgrows the screen
             lg: [cfg.logo_x, cfg.logo_y, cfg.logo_size / self.logo_aspect.max(1.0), self.logo_aspect.max(0.01)],
             lt: [tint[0], tint[1], tint[2], cfg.logo_opacity],

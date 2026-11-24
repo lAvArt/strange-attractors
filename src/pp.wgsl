@@ -4,7 +4,7 @@ struct P {
     v: vec4<f32>,   // x: overlay (transparent ground), y: output width px, z: vignette, w: time
     bg0: vec4<f32>, // ground colour at the top; w: 1 = the logo keeps its SVG colours
     bg1: vec4<f32>, // ground colour at the bottom
-    ex: vec4<f32>,  // x: ground (0 gradient, 1 sunset over a grid, 2 copper bars), z: logo style (0 none, 1 outline, 2 fill, 3 both), w: output height px
+    ex: vec4<f32>,  // x: ground (0 gradient, 1 sunset over a grid, 2 copper bars), y: canvas (how much the ground is paper), z: logo style (0 none, 1 outline, 2 fill, 3 both), w: output height px
     lg: vec4<f32>,  // logo: centre x, centre y (screen fractions), height (fraction of screen height), aspect w/h
     lt: vec4<f32>,  // logo: tint rgb, opacity
     g0: vec4<f32>,  // the stylised grounds' two extra colours (sun and grid; the copper bars)
@@ -24,6 +24,25 @@ fn vs_full(@builtin(vertex_index) vi: u32) -> FOut {
     o.pos = vec4<f32>(q[vi], 0.0, 1.0);
     o.uv = vec2<f32>(q[vi].x * 0.5 + 0.5, 0.5 - q[vi].y * 0.5);
     return o;
+}
+
+
+fn pnoise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let s = f * f * (3.0 - 2.0 * f);
+    let a = fract(sin(dot(i, vec2<f32>(127.1, 311.7))) * 43758.5453);
+    let b = fract(sin(dot(i + vec2<f32>(1.0, 0.0), vec2<f32>(127.1, 311.7))) * 43758.5453);
+    let c = fract(sin(dot(i + vec2<f32>(0.0, 1.0), vec2<f32>(127.1, 311.7))) * 43758.5453);
+    let d = fract(sin(dot(i + vec2<f32>(1.0, 1.0), vec2<f32>(127.1, 311.7))) * 43758.5453);
+    return mix(mix(a, b, s.x), mix(c, d, s.x), s.y);
+}
+
+// the paper's tooth at a pixel, 0 (a hollow) .. 1 (a peak): long fibres lying across, and a finer felt. It is a
+// function of the place on the screen alone, so like real paper it never moves; marks slide over it.
+fn paper(xy: vec2<f32>, k: f32) -> f32 {
+    let q = xy / k;
+    return 0.6 * pnoise(q * vec2<f32>(0.17, 0.4)) + 0.4 * pnoise(q * 0.55 + vec2<f32>(31.0, 17.0));
 }
 
 fn hash12(q: vec2<f32>) -> f32 {
@@ -131,7 +150,17 @@ fn fs_ground(i: FOut) -> @location(0) vec4<f32> {
     // rather than the cleanness of a gradient; and a breath of lightness in the middle, behind the form
     let grain = (hash12(floor(i.pos.xy) * 1.37 + vec2<f32>(11.0, 5.0)) + hash12(floor(i.pos.xy * 0.5) + vec2<f32>(3.0, 17.0)) - 1.0) * p.q.w;
     let lift = 1.0 + 0.5 * p.q.w * 0.12 * exp(-dot(r, r) * 1.6);
-    c = max(c * lift + step * (nz * 1.3 + grain) * select(1.0, 0.0, overlay), vec3<f32>(0.0));
+    // paper: its tooth lit by a low light from the upper left (the slope of the height, which the rasteriser's own
+    // derivatives give for nothing), and a ground laid on by hand, a level or two uneven from place to place. All
+    // of it a function of the place on the screen alone: it cannot crawl.
+    var sheet = 0.0;
+    if (p.ex.y > 0.0) {
+        let hgt = paper(i.pos.xy, p.ex.w / 2000.0);
+        let rake = dpdx(hgt) + dpdy(hgt);
+        let wash = sin(i.uv.x * 3.1 + 1.3) * sin(i.uv.y * 2.3 + 0.7) + 0.5 * sin(i.uv.x * 7.3 + i.uv.y * 5.1) + 0.35 * sin(i.uv.x * 13.0 - i.uv.y * 17.0);
+        sheet = p.ex.y * (rake * 22.0 + (hgt - 0.5) * 2.2 + wash * 1.4);
+    }
+    c = max(c * lift + step * (nz * 1.3 + grain + sheet) * select(1.0, 0.0, overlay), vec3<f32>(0.0));
     return vec4<f32>(c, select(1.0, lg.a, overlay));
 }
 

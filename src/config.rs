@@ -37,6 +37,8 @@ pub struct Config {
     pub orbit: f32,
     /// tracking boxes that follow points of the form, and the faint lines between them
     pub trackers: bool,
+    /// 0..1: how much the picture is treated as a work on paper (1: fully, 0: the clean look)
+    pub canvas: f32,
     pub cycle: f32,
     pub intensity: Option<f32>,
     /// wallpaper only: draw the trails with transparency over the desktop wallpaper instead of on their own ground
@@ -86,6 +88,7 @@ impl Config {
             // slower for the wallpaper: at 20 to 30 frames a second a faster orbit makes fine dots step
             orbit: if wall { 150.0 } else { 80.0 },
             trackers: true,
+            canvas: 1.0,
             cycle: if wall { 150.0 } else { 90.0 },
             intensity: None,
             overlay: false,
@@ -123,6 +126,7 @@ impl Config {
             if let Some(x) = f("zoom") { c.zoom = x }
             if let Some(x) = f("orbit") { c.orbit = x }
             if let Some(x) = get("trackers").and_then(|x| x.as_bool()) { c.trackers = x }
+            if let Some(x) = get("canvas") { c.canvas = x.as_f64().map(|v| v as f32).or(x.as_bool().map(|b| b as u8 as f32)).unwrap_or(1.0) }
             if let Some(x) = f("cycle") { c.cycle = x }
             if let Some(x) = f("intensity") { c.intensity = Some(x) }
             if let Some(x) = f("shift_x") { c.shift_x = Some(x) }
@@ -212,6 +216,9 @@ pub struct Look {
     /// air around the form (0: none)
     pub grain: f32,
     pub motes: f32,
+    /// 0..1: how much the picture is a work on paper (the ground's tooth and hand-laid wash, marks that catch on
+    /// that tooth, strokes of uneven pressure)
+    pub canvas: f32,
     /// 0: a plain gradient, 1: a sunset over a grid, 2: copper bars
     pub ground: u32,
     /// the two extra colours of those grounds
@@ -377,7 +384,7 @@ impl Look {
             name,
             bg_top: p.bg_top, bg_bot: p.bg_bot, c: p.c, accent: p.accent, text: p.text, text_hi: p.text_hi, g0: p.g0, g1: p.g1, vignette: p.vignette,
             line: 0.0, line_alpha: 1.0, cross: 0.0, cross_every: 1, dot: 0.0, dots: Dots::Dust, dot_every: 1,
-            sheet: true, soft: 0.0, wash: 0.0, ribbon_colours: false, scan: 0.0, grain: 1.1, motes: 0.16, ground: 0, pixel: 0, quant: 0.0, chunk: 1,
+            sheet: true, soft: 0.0, wash: 0.0, ribbon_colours: false, scan: 0.0, grain: 1.1, motes: 0.16, canvas: 1.0, ground: 0, pixel: 0, quant: 0.0, chunk: 1,
             shade: 0.8, dof: 0.0, focus: 0.0, dissolve: 2.0, scatter: 0.0, sparkle: 0.0, fog: 0.5, age_pow: 0.45, opacity: 1.0,
             strands: 24, pitch: 0.011, trails: (720, 1200), length: (400, 480), logo_tint: None,
         };
@@ -414,7 +421,7 @@ impl Look {
             },
             // a vector display: a hidden-line wireframe in phosphor colours over a sunset and a grid, with scanlines
             "80s" => Look {
-                line: 0.8, cross: 0.7, cross_every: 4, shade: 1.0, fog: 0.35, age_pow: 0.9, scan: 0.3, grain: 0.0, motes: 0.0, ground: 1, chunk: 2, vignette: 0.45,
+                line: 0.8, cross: 0.7, cross_every: 4, shade: 1.0, fog: 0.35, age_pow: 0.9, scan: 0.3, grain: 0.0, motes: 0.0, canvas: 0.0, ground: 1, chunk: 2, vignette: 0.45,
                 strands: 12, pitch: 0.03, trails: (240, 360), length: (360, 440),
                 ..base(pal(true, Pal {
                     bg_top: hex("#0b0221"), bg_bot: hex("#3a0f5c"),
@@ -424,7 +431,7 @@ impl Look {
             },
             // early computer graphics: flat-shaded ribbons in a coarse picture, dithered down to a few colours
             "90s" => Look {
-                wash: 1.0, ribbon_colours: true, shade: 1.0, fog: 0.0, age_pow: 0.25, grain: 0.0, motes: 0.0, ground: 2, pixel: 400, quant: 6.0, vignette: 0.0,
+                wash: 1.0, ribbon_colours: true, shade: 1.0, fog: 0.0, age_pow: 0.25, grain: 0.0, motes: 0.0, canvas: 0.0, ground: 2, pixel: 400, quant: 6.0, vignette: 0.0,
                 strands: 10, pitch: 0.022, trails: (200, 300), length: (300, 380),
                 ..base(pal(true, Pal {
                     bg_top: hex("#10106a"), bg_bot: hex("#008080"),
@@ -448,6 +455,11 @@ impl Look {
             l.line *= w;
             l.cross *= w;
             l.dot *= w;
+        }
+        l.canvas *= cfg.canvas.clamp(0.0, 1.0);
+        if l.canvas > 0.0 {
+            // a painter's palette: the accent as one muted earth, not a signal colour
+            l.accent = mix(l.accent, l.c[1], 0.4 * l.canvas);
         }
         if cfg.lines == Some(false) {
             l.line = 0.0;
