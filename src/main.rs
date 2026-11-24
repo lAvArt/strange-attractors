@@ -45,6 +45,7 @@ fn main() {
     if let Some(v) = arg(&args, "--preset") { cfg.preset = v.into() }
     if let Some(v) = arg(&args, "--palette") { cfg.palette = v.into() }
     if args.iter().any(|a| a == "--no-annotations") { cfg.annotations = false }
+    if args.iter().any(|a| a == "--no-lines") { cfg.lines = Some(false) }
     if let Some(v) = arg(&args, "--logo") { cfg.logo = v.into() }
     if let Some(v) = arg(&args, "--fps").and_then(|v| v.parse().ok()) { cfg.fps = v }
     if let Some(v) = arg(&args, "--scale").and_then(|v| v.parse().ok()) { cfg.render_scale = Some(v) }

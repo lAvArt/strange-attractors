@@ -45,7 +45,7 @@ Try it without the plugin: `attractor --bench 150`, `attractor --windowed`, `att
 | `weave` | a wireframe of the sheet: hairlines along the flow and across it, coming apart into dust where the trails end |
 | `contour` | fine parallel lines along the flow, like the contours of a relief, brightest where the sheet faces the light, with a shallow depth of field |
 | `stipple` | a halftone: dots whose area is the light, each at its own fixed place so nothing beats or shimmers. Nothing is cut off behind a nearer fold: dots there thin and dim smoothly |
-| `dust` | grains riding the strands like silk, crisp in the focal plane; before and behind it the brightest swell into discs of light, with a few soft lights and sparkles in the theme's accent |
+| `dust` | fine grains condensed along hairline flow lines, crisp in the focal plane; before and behind it the lines fade and a rare bright grain swells into a soft disc of light; a few sparkles in the theme's accent |
 | `80s` | a vector display: a hidden-line wireframe in magenta and cyan over a banded sun and a grid, scanlines, chunky text |
 | `90s` | early computer graphics: flat-shaded ribbons in a coarse picture of about 400 lines (640x400 on a 3200x2000 panel) scaled up in whole pixels and dithered down to 216 colours, over copper bars |
 
@@ -149,6 +149,7 @@ must be converted to paths. Only the shapes and their opacity matter unless you 
 | `preset` | `theme` | see Looks |
 | `palette` | `auto` | `theme`, `original`, or `auto` (the theme, except for `80s` and `90s`) |
 | `annotations` | `true` | the equations and live numbers in the margins |
+| `lines` | `true` | `false` drops the hairlines from a look that has them: `dust` is then grains alone |
 | `system` | `cycle` | an attractor's name (`attractor --list`), or `cycle` to rotate through all |
 | `cycle` | 150 / 90 | seconds on each attractor (wallpaper / screensaver) |
 | `saver` | `auto` | `on`, `off`, or `auto`: on unless Gridfall is enabled, so two screensavers never race on idle |

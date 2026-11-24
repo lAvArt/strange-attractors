@@ -108,8 +108,10 @@ fn widen(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>, side: f32, rpx: f32, col: vec
     let tv = (u.view * vec4<f32>(a - b, 0.0)).xyz;
     let sx = cross(tv, -pv);
     let sl = length(sx);
-    let blur = 0.5 + coc_of(w);
-    let ok = step(1e-12, sl) * step(0.05, w);
+    // out of focus a line widens a little and then fades, rather than spreading into a wide haze
+    let coc = coc_of(w);
+    let blur = 0.5 + min(coc, 2.0);
+    let ok = step(1e-12, sl) * step(0.05, w) * (1.0 - 0.75 * smoothstep(1.5, 4.5, coc));
     let reach = (rpx + blur) * ok;
     o.pos = u.proj * vec4<f32>(pv + sx / max(sl, 1e-12) * (side * reach * w * u.p2.y), 1.0);
     o.d = vec3<f32>(side * reach, rpx, blur);
@@ -280,7 +282,8 @@ fn vs_dot(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> D
     } else {
         let coc = coc_of(w);
         // grains of different sizes, lit by the sheet they ride on
-        r = u.c2.w * (0.4 + 1.3 * h2 * h2);
+        // (never below a size at which a grain would only twinkle: smaller ones are dimmer, not smaller)
+        r = max(u.c2.w * (0.4 + 1.3 * h2 * h2), 0.42);
         alpha *= mix(1.0, 0.3 + 0.7 * l, u.st.x);
         let pick = hash1(id * 7u + 5u);
         if (h1 < u.st2.x) {
@@ -294,14 +297,14 @@ fn vs_dot(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> D
                 // a few soft lights in the focal plane
                 kind = 2.0;
                 col = u.c2.rgb;
-                blur = (3.0 + 5.0 * h0) * u.p2.z / 1080.0;
-                alpha = 0.5 * u.p1.x * age_fade(j);
-            } else if (pick > 0.984) {
+                blur = (2.0 + 3.2 * h0) * u.p2.z / 1080.0;
+                alpha = 0.45 * u.p1.x * age_fade(j);
+            } else if (pick > 0.9965) {
                 // the brightest grains swell into discs of light as they leave the focal plane
                 let d = smoothstep(2.0, 4.5, coc);
                 kind = step(0.5, d);
-                blur = mix(0.5 + min(coc, 2.5), min(coc, 9.5 * u.p2.z / 1080.0), kind);
-                alpha = mix(alpha, (0.10 + 0.28 * h2) * u.p1.x * age_fade(j) * abs(p.w), kind);
+                blur = mix(0.5 + min(coc, 2.5), min(coc, 4.6 * u.p2.z / 1080.0), kind);
+                alpha = mix(alpha, (0.07 + 0.15 * h2) * u.p1.x * age_fade(j) * abs(p.w), kind);
                 col = mix(col, u.c2.rgb, 0.5 * kind);
             } else {
                 // the rest blur a little and then fade out: no haze of half-seen grains
@@ -335,7 +338,7 @@ fn fs_dot(i: DOut) -> @location(0) vec4<f32> {
         cov = exp(-4.5 * d * d / (b * b)) * step(d, b);
     } else if (i.rb.z > 0.5) {
         // a disc out of focus: even, a touch brighter at the rim, with a crisp edge
-        cov = clamp((b - d) / 1.3, 0.0, 1.0) * (0.72 + 0.28 * smoothstep(0.55 * b, b, d));
+        cov = clamp((b - d) / 3.0, 0.0, 1.0) * (0.8 + 0.2 * smoothstep(0.5 * b, b, d));
     } else {
         // a disc of radius r under a blur of radius b: the same ramp as a line, with the light spread over the area
         cov = clamp((r + b - d) / (2.0 * b), 0.0, 1.0) * min(1.0, (r * r) / (b * b));

@@ -28,6 +28,8 @@ pub struct Config {
     pub palette: String,
     /// the attractor's name, equations and live numbers, set quietly around the edges
     pub annotations: bool,
+    /// `false` drops the hairlines from a look that has them (the dust then is grains alone)
+    pub lines: Option<bool>,
     pub speed: f32,
     pub width: Option<f32>,
     pub zoom: f32,
@@ -73,6 +75,7 @@ impl Config {
             strands: None,
             palette: "auto".into(),
             annotations: true,
+            lines: None,
             speed: if wall { 0.7 } else { 1.0 },
             width: None,
             zoom: 1.0,
@@ -107,6 +110,7 @@ impl Config {
             if let Some(x) = f("strands") { c.strands = Some((x as usize).clamp(1, 256)) }
             if let Some(x) = s("palette") { c.palette = x }
             if let Some(x) = get("annotations").and_then(|x| x.as_bool()) { c.annotations = x }
+            if let Some(x) = get("lines").and_then(|x| x.as_bool()) { c.lines = Some(x) }
             if let Some(x) = f("speed") { c.speed = x }
             if let Some(x) = f("width") { c.width = Some(x) }
             if let Some(x) = f("zoom") { c.zoom = x }
@@ -174,8 +178,9 @@ pub struct Look {
     /// annotations: the quiet text, and the live values
     pub text: [f32; 3],
     pub text_hi: [f32; 3],
-    /// width of the lines along the flow (0: none)
+    /// width of the lines along the flow (0: none), and their strength relative to the dots'
     pub line: f32,
+    pub line_alpha: f32,
     /// width of the lines across the flow (0: none), and how many steps apart they are
     pub cross: f32,
     pub cross_every: u32,
@@ -358,7 +363,7 @@ impl Look {
         let base = |p: Pal| Look {
             name,
             bg_top: p.bg_top, bg_bot: p.bg_bot, c: p.c, accent: p.accent, text: p.text, text_hi: p.text_hi, g0: p.g0, g1: p.g1, vignette: p.vignette,
-            line: 0.0, cross: 0.0, cross_every: 1, dot: 0.0, dots: Dots::Dust, dot_every: 1,
+            line: 0.0, line_alpha: 1.0, cross: 0.0, cross_every: 1, dot: 0.0, dots: Dots::Dust, dot_every: 1,
             sheet: true, soft: 0.0, wash: 0.0, ribbon_colours: false, scan: 0.0, ground: 0, pixel: 0, quant: 0.0, chunk: 1,
             shade: 0.8, dof: 0.0, focus: 0.0, dissolve: 2.0, scatter: 0.0, sparkle: 0.0, fog: 0.5, age_pow: 0.45, opacity: 1.0,
             strands: 24, pitch: 0.011, trails: (720, 1200), length: (400, 480), logo_tint: None,
@@ -386,8 +391,8 @@ impl Look {
             },
             // grains scattered through the sheets, with a shallow depth of field
             "dust" => Look {
-                dot: 0.7, dots: Dots::Dust, sheet: false, shade: 0.7, dof: 5.0, focus: -0.25, scatter: 1.0, sparkle: 0.0025, fog: 0.3, age_pow: 0.35, opacity: 0.9,
-                strands: 16, pitch: 0.016, trails: (560, 1040), length: (276, 336),
+                dot: 0.46, dots: Dots::Dust, line: 0.32, line_alpha: 0.26, cross: 0.28, cross_every: 12, sheet: false, shade: 0.7, dof: 5.0, focus: -0.25, scatter: 1.0, sparkle: 0.0025, fog: 0.3, age_pow: 0.35, opacity: 0.9,
+                strands: 16, pitch: 0.016, trails: (336, 688), length: (288, 348),
                 ..base(pal(false, Pal {
                     bg_top: hex("#030304"), bg_bot: hex("#000000"),
                     c: [hex("#8f9198"), hex("#e9eaee"), hex("#ffffff")],
@@ -430,6 +435,10 @@ impl Look {
             l.line *= w;
             l.cross *= w;
             l.dot *= w;
+        }
+        if cfg.lines == Some(false) {
+            l.line = 0.0;
+            l.cross = 0.0;
         }
         if let Some(i) = cfg.intensity { l.opacity = (l.opacity * i).clamp(0.0, 1.0) }
         if let Some(s) = cfg.strands { l.strands = s }

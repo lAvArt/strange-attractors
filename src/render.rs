@@ -467,9 +467,13 @@ impl Renderer {
             st3: [look.wash, look.scan, look.ribbon_colours as u32 as f32, sheet_wide as f32],
         };
         let sheet_stride = 3u32;
-        self.queue.write_buffer(&self.flow.buf, 0, bytemuck::bytes_of(&frame(2)));
+        let mut lf = frame(2);
+        lf.st2[3] = look.opacity * look.line_alpha;
+        self.queue.write_buffer(&self.flow.buf, 0, bytemuck::bytes_of(&lf));
         self.queue.write_buffer(&self.sheet.buf, 0, bytemuck::bytes_of(&frame(sheet_stride)));
-        self.queue.write_buffer(&self.cross.buf, 0, bytemuck::bytes_of(&frame(look.cross_every.max(1))));
+        let mut cf = frame(look.cross_every.max(1));
+        cf.st2[3] = look.opacity * look.line_alpha;
+        self.queue.write_buffer(&self.cross.buf, 0, bytemuck::bytes_of(&cf));
         let mut df = frame(look.dot_every.max(1));
         // in the dot pass this slot says how faint a fully covered dot becomes (0: nothing covers dots)
         df.st3[0] = if self.t.veil.is_some() { look.soft } else { 0.0 };
