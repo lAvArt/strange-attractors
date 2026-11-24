@@ -25,6 +25,8 @@ struct U {
 @group(0) @binding(1) var<storage, read> pts: array<vec4<f32>>;
 @group(0) @binding(2) var veil: texture_2d<f32>; // view depth and strength of the nearest sheet (soft looks)
 @group(0) @binding(3) var veil_samp: sampler;
+@group(0) @binding(4) var paper_tex: texture_2d<f32>; // the paper's tooth, baked once: a tile
+@group(0) @binding(5) var paper_samp: sampler;
 
 struct VOut {
     @builtin(position) pos: vec4<f32>,
@@ -40,22 +42,10 @@ fn hash1(x: u32) -> f32 {
 }
 
 
-fn pnoise(p: vec2<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let s = f * f * (3.0 - 2.0 * f);
-    let a = fract(sin(dot(i, vec2<f32>(127.1, 311.7))) * 43758.5453);
-    let b = fract(sin(dot(i + vec2<f32>(1.0, 0.0), vec2<f32>(127.1, 311.7))) * 43758.5453);
-    let c = fract(sin(dot(i + vec2<f32>(0.0, 1.0), vec2<f32>(127.1, 311.7))) * 43758.5453);
-    let d = fract(sin(dot(i + vec2<f32>(1.0, 1.0), vec2<f32>(127.1, 311.7))) * 43758.5453);
-    return mix(mix(a, b, s.x), mix(c, d, s.x), s.y);
-}
-
 // the paper's tooth at a pixel, 0 (a hollow) .. 1 (a peak): long fibres lying across, and a finer felt. It is a
 // function of the place on the screen alone, so like real paper it never moves; marks slide over it.
 fn paper(xy: vec2<f32>, k: f32) -> f32 {
-    let q = xy / k;
-    return 0.6 * pnoise(q * vec2<f32>(0.17, 0.4)) + 0.4 * pnoise(q * 0.55 + vec2<f32>(31.0, 17.0));
+    return textureSampleLevel(paper_tex, paper_samp, xy / (k * 1024.0), 0.0).r;
 }
 
 // pigment dragged over paper catches on the peaks of its tooth and skips the hollows

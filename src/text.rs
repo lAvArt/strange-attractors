@@ -279,7 +279,7 @@ impl Annot {
             y += lh;
         }
         y += lh * 0.35;
-        self.text(&mut v, sys.params, 0, x, y, false, 0.0, live);
+        self.text(&mut v, &sys.params(), 0, x, y, false, 0.0, live);
 
         // top right: the rotation, as a row of dots, and what is drawn
         let d = (self.px[0] * 0.36).round().max(2.0);
@@ -296,6 +296,7 @@ impl Annot {
             ("LOOK", look.name.to_uppercase()),
             ("STRANDS", format!("{} × {}", groups, tr.m)),
             ("POINTS", group_digits((tr.n * tr.len) as u64)),
+            ("SEED", format!("{}", world.seed())),
         ] {
             self.text(&mut v, &value, 0, x1 - arm, y, true, 0.0, quiet);
             self.text(&mut v, label, 0, x1 - arm - a0 * 12.0, y, true, 0.12, faint);

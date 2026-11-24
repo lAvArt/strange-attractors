@@ -179,7 +179,8 @@ impl Trails {
     /// one integration step for every strand, then hold each ribbon together
     fn advance(&mut self) {
         let dt = self.cal.dt;
-        let f = self.sys.f;
+        let sys = self.sys;
+        let f = |x: Vec3| sys.at(x);
         // The strands run on a rescaled clock: the field is slowed where it is fast and hurried where it is slow, which
         // leaves every orbit exactly the curve it was but makes the steps along it nearly equal in length. Without
         // this the fast outer loops of some systems would be drawn with a few long straight pieces.
@@ -386,13 +387,13 @@ impl Trails {
 
     /// how fast the flow runs at a point (the system's own coordinates and time)
     pub fn speed_at(&self, p: Vec3) -> f64 {
-        norm((self.sys.f)(p))
+        norm(self.sys.at(p))
     }
 
     /// one strand to report on: where it is (the system's own coordinates) and how fast it moves
     pub fn lead(&self) -> (Vec3, f64) {
         let p = self.pos[self.m / 2];
-        (p, norm((self.sys.f)(p)))
+        (p, norm(self.sys.at(p)))
     }
 
     pub fn step(&mut self) {

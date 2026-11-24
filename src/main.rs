@@ -23,7 +23,7 @@ fn main() {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
             "attractor [--wallpaper | --windowed | --keep] [--system NAME|cycle] [--preset theme|weave|contour|stipple|dust|80s|90s] [--palette auto|theme|original]\n\
-             \x20         [--logo none|twinise|omarchy|FILE.svg] [--fps N] [--scale F] [--shot out.png [--size WxH] [--secs N]] [--list]"
+             \x20         [--logo none|twinise|omarchy|FILE.svg] [--fps N] [--scale F] [--shot out.png [--size WxH] [--secs N]] [--record out.mp4 [--secs N] [--cycle N]] [--seed N] [--list]"
         );
         return;
     }
@@ -48,12 +48,36 @@ fn main() {
     if args.iter().any(|a| a == "--no-lines") { cfg.lines = Some(false) }
     if args.iter().any(|a| a == "--no-trackers") { cfg.trackers = false }
     if let Some(v) = arg(&args, "--canvas").and_then(|v| v.parse().ok()) { cfg.canvas = v }
+    if let Some(v) = arg(&args, "--cycle").and_then(|v| v.parse().ok()) { cfg.cycle = v }
     if let Some(v) = arg(&args, "--orbit").and_then(|v| v.parse().ok()) { cfg.orbit = v }
     if let Some(v) = arg(&args, "--logo") { cfg.logo = v.into() }
     if let Some(v) = arg(&args, "--fps").and_then(|v| v.parse().ok()) { cfg.fps = v }
     if let Some(v) = arg(&args, "--scale").and_then(|v| v.parse().ok()) { cfg.render_scale = Some(v) }
     gpu::prepare_env(&cfg);
-    let seed = arg(&args, "--seed").and_then(|v| v.parse().ok()).unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(7));
+    if args.iter().any(|a| a == "--classic") { cfg.fixed_params = true }
+    // a small number, so the margin can show it and `--seed` can bring a picture back
+    let seed = arg(&args, "--seed").and_then(|v| v.parse().ok()).or(cfg.seed).unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64 % 65536).unwrap_or(7));
+    if let Some(n) = arg(&args, "--draws").and_then(|v| v.parse::<u64>().ok()) {
+        // how the parameter boxes fare: for each system, n draws
+        for base in systems::ALL {
+            let (mut lo, mut hi, mut rejected, mut fell) = (f64::MAX, f64::MIN, 0, 0);
+            let mut classic = 0.0;
+            for k in 0..n {
+                let (s, d) = systems::draw(base, seed + k * 101);
+                if gpu::debug() {
+                    println!("    {}  ->  {:.3}", s.params(), d.lyapunov);
+                }
+                classic = d.classic;
+                rejected += d.rejected;
+                if d.fell_back { fell += 1 } else {
+                    lo = lo.min(d.lyapunov);
+                    hi = hi.max(d.lyapunov);
+                }
+            }
+            println!("{:>9}: classic lyapunov {:.3}; {} draws accepted with {:.3} .. {:.3}, {} proposals rejected, {} fell back to the classic parameters", base.name, classic, n - fell, lo, hi, rejected, fell);
+        }
+        return;
+    }
 
     if let Some(n) = arg(&args, "--bench").and_then(|v| v.parse::<u32>().ok()) {
         let size = arg(&args, "--size").and_then(|v| v.split_once('x')).and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))).unwrap_or((3200, 2000));
@@ -70,6 +94,15 @@ fn main() {
         let size = arg(&args, "--size").and_then(|v| v.split_once('x')).and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))).unwrap_or((3200, 2000));
         let prefix = arg(&args, "--out").unwrap_or("flicker");
         shot::flicker(&cfg, mode, prefix, size, n, cfg.fps, args.iter().any(|a| a == "--hold"), seed);
+        return;
+    }
+    if let Some(path) = arg(&args, "--record") {
+        let size = arg(&args, "--size").and_then(|v| v.split_once('x')).and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))).unwrap_or((1920, 1200));
+        let secs = arg(&args, "--secs").and_then(|v| v.parse().ok()).unwrap_or(60.0);
+        if arg(&args, "--fps").is_none() { cfg.fps = 30.0 }
+        // short stays, so a clip shows the attractors changing
+        if arg(&args, "--cycle").is_none() { cfg.cycle = 19.0 }
+        shot::record(&cfg, mode, path, size, secs, seed);
         return;
     }
     if let Some(path) = arg(&args, "--shot") {

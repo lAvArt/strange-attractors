@@ -283,3 +283,71 @@ pub fn dark_check(cfg: &Config, mode: Mode, size: (u32, u32), secs: f32, seed: u
         worst
     );
 }
+
+/// `--record out.mp4`: the real thing, offscreen, with the real pacing (`fps` frames to the second of the world's
+/// time), encoded by ffmpeg. With a seed, every run gives the same film.
+pub fn record(cfg: &Config, mode: Mode, path: &str, size: (u32, u32), secs: f32, seed: u64) {
+    use std::io::Write;
+    let fps = cfg.fps.clamp(1.0, 240.0);
+    let instance = gpu::instance();
+    let adapter = gpu::adapter(&instance, None, cfg);
+    let (device, queue) = gpu::device(&adapter);
+    let mut world = World::new(cfg, seed);
+    world.blocking = true;
+    // the same 8-bit sRGB target the live surface is: the frames hold what the screen would show
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let mut r = Renderer::new(&device, &queue, format, size, gpu::render_scale(cfg, mode, size.0, size.1), &world);
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("record"),
+        size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let row = (size.0 * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (row * size.1) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+    let mut ffmpeg = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba"])
+        .args(["-s", &format!("{}x{}", size.0, size.1), "-r", &format!("{fps}"), "-i", "-"])
+        .args(["-vf", "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p", "-c:v", "libx264", "-crf", "18", "-preset", "medium"])
+        .args(["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv", "-movflags", "+faststart", path])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("ffmpeg");
+    let mut pipe = ffmpeg.stdin.take().expect("ffmpeg stdin");
+    let frames = (secs * fps) as u32;
+    let mut names = vec![world.system_name()];
+    for _ in 0..frames {
+        r.draw(&world, &view);
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        enc.copy_texture_to_buffer(
+            target.as_image_copy(),
+            wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(size.1) } },
+            wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+        );
+        queue.submit(Some(enc.finish()));
+        buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        {
+            let data = buf.slice(..).get_mapped_range().expect("map");
+            for y in 0..size.1 as usize {
+                if pipe.write_all(&data[y * row as usize..y * row as usize + size.0 as usize * 4]).is_err() {
+                    eprintln!("attractor: ffmpeg stopped reading");
+                    return;
+                }
+            }
+        }
+        buf.unmap();
+        world.update(1.0 / fps);
+        if names.last() != Some(&world.system_name()) {
+            names.push(world.system_name());
+        }
+    }
+    drop(pipe);
+    let _ = ffmpeg.wait();
+    println!("{} frames at {} fps, seed {}, {} ({}) -> {}", frames, fps, seed, names.join(" > "), world.look.name, path);
+}

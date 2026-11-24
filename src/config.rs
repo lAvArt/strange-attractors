@@ -37,6 +37,10 @@ pub struct Config {
     pub orbit: f32,
     /// tracking boxes that follow points of the form, and the faint lines between them
     pub trackers: bool,
+    /// a fixed seed, for the same pictures every run (`None`: a new one each start)
+    pub seed: Option<u64>,
+    /// keep every system at its classic parameters instead of drawing new ones for each instance
+    pub fixed_params: bool,
     /// 0..1: how much the picture is treated as a work on paper (1: fully, 0: the clean look)
     pub canvas: f32,
     pub cycle: f32,
@@ -88,6 +92,8 @@ impl Config {
             // slower for the wallpaper: at 20 to 30 frames a second a faster orbit makes fine dots step
             orbit: if wall { 150.0 } else { 80.0 },
             trackers: true,
+            seed: None,
+            fixed_params: false,
             canvas: 1.0,
             cycle: if wall { 150.0 } else { 90.0 },
             intensity: None,
@@ -125,6 +131,8 @@ impl Config {
             if let Some(x) = f("width") { c.width = Some(x) }
             if let Some(x) = f("zoom") { c.zoom = x }
             if let Some(x) = f("orbit") { c.orbit = x }
+            if let Some(x) = get("seed").and_then(|x| x.as_u64()) { c.seed = Some(x) }
+            if let Some(x) = get("randomize").and_then(|x| x.as_bool()) { c.fixed_params = !x }
             if let Some(x) = get("trackers").and_then(|x| x.as_bool()) { c.trackers = x }
             if let Some(x) = get("canvas") { c.canvas = x.as_f64().map(|v| v as f32).or(x.as_bool().map(|b| b as u8 as f32)).unwrap_or(1.0) }
             if let Some(x) = f("cycle") { c.cycle = x }

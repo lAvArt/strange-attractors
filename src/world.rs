@@ -73,6 +73,13 @@ pub struct World {
     reach_poll: f32,
     pub trackers: Vec<Tracker>,
     track_poll: f32,
+    /// the next attractor, being prepared on a thread of its own while the current one fades out
+    pending: Option<std::thread::JoinHandle<Trails>>,
+    /// which way round the camera goes
+    turn: f32,
+    /// wait for the next attractor rather than hold an empty frame for it (offscreen recording: every run of a seed
+    /// must then give the same frames)
+    pub blocking: bool,
 }
 
 impl World {
@@ -80,15 +87,33 @@ impl World {
         let cycling = systems::find(&cfg.system).is_none();
         // a different starting attractor each run, rather than always Lorenz
         let first = systems::find(&cfg.system).unwrap_or((seed as usize >> 3) % systems::ALL.len());
-        let order: Vec<usize> = (0..systems::ALL.len()).map(|i| (first + i) % systems::ALL.len()).collect();
+        // the rotation: every system once, in an order of this run's own, starting with `first`
+        let mut order: Vec<usize> = (0..systems::ALL.len()).collect();
+        let mut h = seed.wrapping_mul(0x9E3779B97F4A7C15) | 1;
+        for i in (1..order.len()).rev() {
+            h ^= h << 13;
+            h ^= h >> 7;
+            h ^= h << 17;
+            order.swap(i, (h >> 20) as usize % (i + 1));
+        }
+        let at = order.iter().position(|&s| s == first).unwrap_or(0);
+        order.rotate_left(at);
         let look = Look::resolve(cfg);
         let trails = World::make_trails(&look, cfg, order[0], seed, true);
-        World { cfg: cfg.clone(), from_look: look.clone(), target_look: look.clone(), blend: 1.0, theme_stamp: crate::config::theme_stamp(), theme_poll: 0.0, look, trails, logo: logo::load(&cfg.logo), t: 0.0, fade: 1.0, epoch: 0, order, idx: 0, since: 0.0, phase: Phase::Run, acc: 0.0, seed, cycling, cam_phase: (seed % 1000) as f32, hold_camera: false, held: 0.0, reach: 1.0, reach_goal: 1.0, reach_poll: 0.0, trackers: World::make_trackers(cfg, seed), track_poll: 0.0 }
+        World { cfg: cfg.clone(), from_look: look.clone(), target_look: look.clone(), blend: 1.0, theme_stamp: crate::config::theme_stamp(), theme_poll: 0.0, look, trails, logo: logo::load(&cfg.logo), t: 0.0, fade: 1.0, epoch: 0, order, idx: 0, since: 0.0, phase: Phase::Run, acc: 0.0, seed, cycling, cam_phase: (seed % 1000) as f32, hold_camera: false, held: 0.0, reach: 1.0, reach_goal: 1.0, reach_poll: 0.0, trackers: World::make_trackers(cfg, seed), track_poll: 0.0, pending: None, blocking: false, turn: if (seed >> 3) & 1 == 0 { 1.0 } else { -1.0 } }
     }
 
+    /// A new instance of system `sys`: parameters of its own (drawn and tested by `systems::draw`), fitted and framed
+    /// afresh, its strands seeded from `seed`. Takes some tens of milliseconds.
     fn make_trails(look: &Look, cfg: &Config, sys: usize, seed: u64, spread: bool) -> Trails {
         let (n, len) = if cfg.wall { (look.trails.0, look.length.0) } else { (look.trails.1, look.length.1) };
-        Trails::new(systems::ALL[sys], n, len, look.strands, look.pitch as f64, seed, spread)
+        let instance = if cfg.fixed_params { systems::ALL[sys] } else { systems::draw(&systems::ALL[sys], seed).0 };
+        Trails::new(instance, n, len, look.strands, look.pitch as f64, seed, spread)
+    }
+
+    /// the seed of the instance now running: `--seed N --system NAME` brings it back
+    pub fn seed(&self) -> u64 {
+        self.seed
     }
 
     /// With the `theme` look, notice when the system theme changes (checked once a second, a single stat call) and
@@ -245,16 +270,25 @@ impl World {
             Phase::Run => {
                 if self.cycling && self.since > self.cfg.cycle {
                     self.phase = Phase::Out(0.0);
+                    // prepare the next attractor while this one fades, so the switch itself costs no frame
+                    let next = self.order[(self.idx + 1) % self.order.len()];
+                    let seed = (self.seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407) >> 33) % 65536;
+                    let (look, cfg) = (self.look.clone(), self.cfg.clone());
+                    self.pending = Some(std::thread::spawn(move || World::make_trails(&look, &cfg, next, seed, false)));
                 }
             }
             Phase::Out(s) => {
                 let s = s + dt;
                 self.fade = (1.0 - s / FADE).clamp(0.0, 1.0);
-                if s >= FADE {
+                if s >= FADE && (self.blocking || self.pending.as_ref().is_none_or(|p| p.is_finished())) {
                     self.idx = (self.idx + 1) % self.order.len();
-                    self.seed = self.seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    self.seed = (self.seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407) >> 33) % 65536;
                     // the next attractor is born as a point and grows out of it
-                    self.trails = World::make_trails(&self.look, &self.cfg, self.order[self.idx], self.seed, false);
+                    self.trails = match self.pending.take().and_then(|p| p.join().ok()) {
+                        Some(t) => t,
+                        None => World::make_trails(&self.look, &self.cfg, self.order[self.idx], self.seed, false),
+                    };
+                    self.turn = if (self.seed >> 3) & 1 == 0 { 1.0 } else { -1.0 };
                     self.epoch += 1;
                     self.phase = Phase::In(0.0);
                 } else {
@@ -280,7 +314,7 @@ impl World {
     pub fn orbit(&self) -> (f32, f32, f32) {
         let t = if self.hold_camera { self.held } else { self.t } + self.cam_phase;
         let rev = self.cfg.orbit.max(10.0);
-        (t * std::f32::consts::TAU / rev, 0.62 + 0.20 * (t * 0.045).sin(), 4.1 * self.reach / self.cfg.zoom.max(0.2) * (1.0 + 0.03 * (t * 0.017).sin()))
+        (self.turn * t * std::f32::consts::TAU / rev, 0.62 + 0.20 * (t * 0.045).sin(), 4.1 * self.reach / self.cfg.zoom.max(0.2) * (1.0 + 0.03 * (t * 0.017).sin()))
     }
 
     /// how far the picture is slid sideways and up, in units of half the screen

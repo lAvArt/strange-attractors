@@ -149,6 +149,9 @@ must be converted to paths. Only the shapes and their opacity matter unless you 
 | `preset` | `theme` | see Looks |
 | `palette` | `auto` | `theme`, `original`, or `auto` (the theme, except for `80s` and `90s`) |
 | `annotations` | `true` | the equations and live numbers in the margins |
+| `canvas` | `1` | 0 to 1: how much the picture is a work on paper (the ground's tooth and hand-laid wash, marks that catch on that tooth, strokes of uneven pressure, blooms with pooled edges). `0` is the clean look. Not applied to `80s` and `90s` |
+| `randomize` | `true` | every instance of a system gets parameters of its own (see below); `false`, or `--classic`, keeps the classic ones |
+| `seed` | random | a number from 0 to 65535 fixes the run; the margin shows the seed of the instance on screen, and `--seed N --system NAME` brings it back |
 | `trackers` | `true` | tracking boxes locked onto the system's fixed points and the orbit's farthest reaches, with faint lines between them; `--no-trackers` for one run |
 | `orbit` | 150 / 80 | seconds for the camera to go once round the form (wallpaper / screensaver). Faster reads as more alive; at 20 to 30 frames a second it also makes fine dots step more per frame |
 | `lines` | `true` | `false` drops the hairlines from a look that has them: `dust` is then grains alone |
@@ -174,6 +177,16 @@ preset draws the default look).
 
 Each attractor is integrated on the CPU in f64 with RK4 and fitted automatically to the screen (centre, radius and step
 size are measured from a warm-up orbit, so there are no hand-tuned scales).
+
+**Never the same twice.** Each time a system comes up, its parameters are drawn from a box around the classic values
+and tested before use: a short Benettin run must give a largest Lyapunov exponent of at least 40% of the classic
+system's, and the orbit must stay within three times the classic orbit's reach without collapsing. Failures are redrawn
+(up to twelve times, then the classic parameters are used); the test matters, because these systems are riddled with
+periodic windows (Thomas at b = 0.190 and 0.195 is periodic, at 0.192 chaotic). The fit, the framing and the camera are
+then made afresh for that instance, the strands are seeded elsewhere on the sheet, the camera starts elsewhere and may
+go round the other way, and the rotation runs through all eight systems in an order of its own. The next instance is
+prepared on a thread while the current one fades, so the switch costs no frame. The margins print the values in use.
+`attractor --draws 24` reports how each box fares.
 
 **Ribbons.** Strands are grouped into ribbons of neighbours that start a hair apart along a short curve. Chaos would
 pull them apart exponentially; instead each ribbon is held to a constant width the way a Lyapunov vector is

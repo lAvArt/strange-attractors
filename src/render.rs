@@ -83,6 +83,7 @@ pub struct Renderer {
     /// a stand-in for the veil in the passes that do not read one (kept alive for their bind groups)
     _blank: wgpu::TextureView,
     soft: bool,
+    paper: (wgpu::TextureView, wgpu::Sampler),
     flow: Layer,
     cross: Layer,
     dot: Layer,
@@ -125,7 +126,7 @@ fn scene_size(out: (u32, u32), scale: f32, pixel: u32) -> ((u32, u32), u32) {
     if scale >= 0.999 { (out, 0) } else { ((((out.0 as f32 * scale) as u32).max(1), ((out.1 as f32 * scale) as u32).max(1)), 0) }
 }
 
-fn tex_group(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, view: &wgpu::TextureView, buf: &wgpu::Buffer) -> wgpu::BindGroup {
+fn tex_group(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, view: &wgpu::TextureView, buf: &wgpu::Buffer, paper: &(wgpu::TextureView, wgpu::Sampler)) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: bgl,
@@ -133,17 +134,51 @@ fn tex_group(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, sampler: &wgpu:
             wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
             wgpu::BindGroupEntry { binding: 2, resource: buf.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&paper.0) },
+            wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&paper.1) },
         ],
     })
 }
 
-fn strand_entries<'a>(buf: &'a wgpu::Buffer, ring: &'a wgpu::Buffer, veil: &'a wgpu::TextureView, sampler: &'a wgpu::Sampler) -> [wgpu::BindGroupEntry<'a>; 4] {
+fn strand_entries<'a>(buf: &'a wgpu::Buffer, ring: &'a wgpu::Buffer, veil: &'a wgpu::TextureView, sampler: &'a wgpu::Sampler, paper: &'a (wgpu::TextureView, wgpu::Sampler)) -> [wgpu::BindGroupEntry<'a>; 6] {
     [
         wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
         wgpu::BindGroupEntry { binding: 1, resource: ring.as_entire_binding() },
         wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(veil) },
         wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(sampler) },
+        wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&paper.0) },
+        wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&paper.1) },
     ]
+}
+
+/// The paper's tooth, as a 1024-pixel tile: long fibres lying across and a finer felt between them. Value noise on
+/// lattices that wrap, so the tile has no seam.
+fn bake_paper() -> Vec<u8> {
+    const N: usize = 1024;
+    let hash = |x: u32, y: u32, s: u32| {
+        let mut h = x.wrapping_mul(374761393).wrapping_add(y.wrapping_mul(668265263)).wrapping_add(s.wrapping_mul(2246822519));
+        h = (h ^ (h >> 13)).wrapping_mul(1274126177);
+        ((h ^ (h >> 16)) & 0xffff) as f32 / 65535.0
+    };
+    let noise = |x: f32, y: f32, cx: u32, cy: u32, s: u32| {
+        let (fx, fy) = (x * cx as f32 / N as f32, y * cy as f32 / N as f32);
+        let (ix, iy) = (fx.floor(), fy.floor());
+        let (tx, ty) = (fx - ix, fy - iy);
+        let (sx, sy) = (tx * tx * (3.0 - 2.0 * tx), ty * ty * (3.0 - 2.0 * ty));
+        let (x0, y0) = (ix as u32 % cx, iy as u32 % cy);
+        let (x1, y1) = ((x0 + 1) % cx, (y0 + 1) % cy);
+        let (a, b, c, d) = (hash(x0, y0, s), hash(x1, y0, s), hash(x0, y1, s), hash(x1, y1, s));
+        (a + (b - a) * sx) + ((c + (d - c) * sx) - (a + (b - a) * sx)) * sy
+    };
+    let mut out = vec![0u8; N * N];
+    for y in 0..N {
+        for x in 0..N {
+            let (fx, fy) = (x as f32, y as f32);
+            let h = 0.6 * noise(fx, fy, 174, 410, 1) + 0.4 * noise(fx, fy, 563, 563, 2);
+            out[y * N + x] = (h * 255.0) as u8;
+        }
+    }
+    out
 }
 
 fn tex2d(device: &wgpu::Device, w: u32, h: u32, format: wgpu::TextureFormat, usage: wgpu::TextureUsages) -> wgpu::Texture {
@@ -188,8 +223,27 @@ impl Renderer {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::VERTEX, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
             ],
         });
+        let paper = {
+            let t = tex2d(device, 1024, 1024, wgpu::TextureFormat::R8Unorm, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
+            queue.write_texture(t.as_image_copy(), &bake_paper(), wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(1024), rows_per_image: Some(1024) }, wgpu::Extent3d { width: 1024, height: 1024, depth_or_array_layers: 1 });
+            let s = device.create_sampler(&wgpu::SamplerDescriptor {
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                address_mode_u: wgpu::AddressMode::Repeat,
+                address_mode_v: wgpu::AddressMode::Repeat,
+                ..Default::default()
+            });
+            (t.create_view(&wgpu::TextureViewDescriptor::default()), s)
+        };
         let blank = tex2d(device, 1, 1, VEIL, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING).create_view(&Default::default());
         let veil_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Linear,
@@ -218,7 +272,7 @@ impl Renderer {
             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
                 layout: &bgl,
-                entries: &strand_entries(&buf, &ring, &blank, &veil_sampler),
+                entries: &strand_entries(&buf, &ring, &blank, &veil_sampler, &paper),
             });
             let pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(vs),
@@ -265,6 +319,13 @@ impl Renderer {
                 },
                 wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
                 wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::VERTEX_FRAGMENT, ty: uniform(None), count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
             ],
         });
         let pp_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&pp_bgl)], immediate_size: 0 });
@@ -319,7 +380,7 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let ground_bind = tex_group(device, &pp_bgl, sampler, &logo_view, &pass_buf);
+        let ground_bind = tex_group(device, &pp_bgl, sampler, &logo_view, &pass_buf, &paper);
         let text_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("text"),
             size: (MAX_TEXT_VERTS * std::mem::size_of::<TextVertex>()) as u64,
@@ -338,6 +399,7 @@ impl Renderer {
             bgl,
             _blank: blank,
             soft: world.look.soft > 0.0,
+            paper,
             flow,
             cross,
             dot,
@@ -384,7 +446,7 @@ impl Renderer {
             wgpu::Extent3d { width: a.atlas_w, height: a.atlas_h, depth_or_array_layers: 1 },
         );
         let view = t.create_view(&wgpu::TextureViewDescriptor::default());
-        self.text_bind = Some(tex_group(&self.device, &self.pp_bgl, if self.chunk > 1 { &self.nearest } else { &self.sampler }, &view, &self.pass_buf));
+        self.text_bind = Some(tex_group(&self.device, &self.pp_bgl, if self.chunk > 1 { &self.nearest } else { &self.sampler }, &view, &self.pass_buf, &self.paper));
         self.annot = Some(a);
         self.text_tick = -1;
     }
@@ -398,7 +460,7 @@ impl Renderer {
         let depth = tex2d(&self.device, w, h, DEPTH, wgpu::TextureUsages::RENDER_ATTACHMENT).create_view(&Default::default());
         let mid = ((w, h) != out).then(|| {
             let v = tex2d(&self.device, w, h, self.format, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING).create_view(&Default::default());
-            let g = tex_group(&self.device, &self.pp_bgl, &self.sampler, &v, &self.pass_buf);
+            let g = tex_group(&self.device, &self.pp_bgl, &self.sampler, &v, &self.pass_buf, &self.paper);
             (v, g)
         });
         let rebuilt = self.annot.is_some() && self.t.h != h;
@@ -406,7 +468,7 @@ impl Renderer {
             let (vw, vh) = (w.div_ceil(4), h.div_ceil(4));
             let view = tex2d(&self.device, vw, vh, VEIL, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING).create_view(&Default::default());
             let depth = tex2d(&self.device, vw, vh, DEPTH, wgpu::TextureUsages::RENDER_ATTACHMENT).create_view(&Default::default());
-            let dot_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &self.bgl, entries: &strand_entries(&self.dot.buf, &self.ring, &view, &self.sampler) });
+            let dot_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &self.bgl, entries: &strand_entries(&self.dot.buf, &self.ring, &view, &self.sampler, &self.paper) });
             Veil { view, depth, dot_bind }
         });
         self.t = Targets { veil, k, depth, mid, w, h };
@@ -584,11 +646,11 @@ impl Renderer {
             rp.set_pipeline(&self.ground);
             rp.set_bind_group(0, &self.ground_bind, &[]);
             rp.draw(0..3, 0..1);
-            if let (Some(bind), true) = (&self.text_bind, self.text_count > 0) {
+            if let (Some(bind), true) = (&self.text_bind, self.text_static > 0) {
                 rp.set_pipeline(&self.text);
                 rp.set_bind_group(0, bind, &[]);
                 rp.set_vertex_buffer(0, self.text_buf.slice(..));
-                rp.draw(0..self.text_count, 0..1);
+                rp.draw(0..self.text_static, 0..1);
             }
             if look.motes > 0.0 {
                 rp.set_pipeline(&self.mote.pipe);
@@ -618,6 +680,13 @@ impl Renderer {
                 rp.set_pipeline(&self.dot.pipe);
                 rp.set_bind_group(0, self.t.veil.as_ref().map(|v| &v.dot_bind).unwrap_or(&self.dot.bind), &[]);
                 rp.draw(0..3, first * n..rows * n);
+            }
+            // the tracking boxes go over the form, as drafting marks would
+            if let (Some(bind), true) = (&self.text_bind, self.text_count > self.text_static) {
+                rp.set_pipeline(&self.text);
+                rp.set_bind_group(0, bind, &[]);
+                rp.set_vertex_buffer(0, self.text_buf.slice(..));
+                rp.draw(self.text_static..self.text_count, 0..1);
             }
         }
         if let Some((_, group)) = &self.t.mid {

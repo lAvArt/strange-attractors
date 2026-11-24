@@ -14,6 +14,8 @@ struct P {
 @group(0) @binding(0) var t0: texture_2d<f32>; // the rasterised logo, premultiplied (ground) / the scene (blit) / the glyph atlas (text)
 @group(0) @binding(1) var samp: sampler;
 @group(0) @binding(2) var<uniform> p: P;
+@group(0) @binding(3) var paper_tex: texture_2d<f32>; // the paper's tooth, baked once: a tile
+@group(0) @binding(4) var paper_samp: sampler;
 
 struct FOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
 
@@ -27,22 +29,10 @@ fn vs_full(@builtin(vertex_index) vi: u32) -> FOut {
 }
 
 
-fn pnoise(p: vec2<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let s = f * f * (3.0 - 2.0 * f);
-    let a = fract(sin(dot(i, vec2<f32>(127.1, 311.7))) * 43758.5453);
-    let b = fract(sin(dot(i + vec2<f32>(1.0, 0.0), vec2<f32>(127.1, 311.7))) * 43758.5453);
-    let c = fract(sin(dot(i + vec2<f32>(0.0, 1.0), vec2<f32>(127.1, 311.7))) * 43758.5453);
-    let d = fract(sin(dot(i + vec2<f32>(1.0, 1.0), vec2<f32>(127.1, 311.7))) * 43758.5453);
-    return mix(mix(a, b, s.x), mix(c, d, s.x), s.y);
-}
-
 // the paper's tooth at a pixel, 0 (a hollow) .. 1 (a peak): long fibres lying across, and a finer felt. It is a
 // function of the place on the screen alone, so like real paper it never moves; marks slide over it.
 fn paper(xy: vec2<f32>, k: f32) -> f32 {
-    let q = xy / k;
-    return 0.6 * pnoise(q * vec2<f32>(0.17, 0.4)) + 0.4 * pnoise(q * 0.55 + vec2<f32>(31.0, 17.0));
+    return textureSampleLevel(paper_tex, paper_samp, xy / (k * 1024.0), 0.0).r;
 }
 
 fn hash12(q: vec2<f32>) -> f32 {
