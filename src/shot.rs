@@ -8,6 +8,8 @@ pub fn run(cfg: &Config, mode: Mode, path: &str, size: (u32, u32), secs: f32, se
     let adapter = gpu::adapter(&instance, None, cfg);
     let (device, queue) = gpu::device(&adapter);
     let mut world = World::new(cfg, seed);
+    // (offscreen time runs faster than the clock: wait for the next attractor instead of drawing an empty frame)
+    world.blocking = true;
     let steps = (secs * 30.0) as usize;
     for _ in 0..steps {
         world.update(1.0 / 30.0);
@@ -350,4 +352,85 @@ pub fn record(cfg: &Config, mode: Mode, path: &str, size: (u32, u32), secs: f32,
     drop(pipe);
     let _ = ffmpeg.wait();
     println!("{} frames at {} fps, seed {}, {} ({}) -> {}", frames, fps, seed, names.join(" > "), world.look.name, path);
+}
+
+/// `--handoff-test`: run a wallpaper's world for a while, publish its scene, start a screensaver's world from the
+/// file, and compare the two: the strands' whole history, and the first frame, pixel for pixel. Then save the frames
+/// of the screensaver waking up.
+pub fn handoff_test(wall: &Config, saver: &Config, prefix: &str, size: (u32, u32), secs: f32, seed: u64) {
+    let instance = gpu::instance();
+    let adapter = gpu::adapter(&instance, None, wall);
+    let (device, queue) = gpu::device(&adapter);
+    let mut a = World::new(wall, seed);
+    for _ in 0..(secs * wall.fps) as usize {
+        a.update(1.0 / wall.fps);
+    }
+    let path = format!("{prefix}-scene.json");
+    a.publish_scene(&path);
+    let t0 = std::time::Instant::now();
+    let Some(mut b) = World::from_scene(saver, &path, 30.0) else {
+        println!("the scene was NOT taken over (see ATTRACTOR_DEBUG=1)");
+        return;
+    };
+    let took = t0.elapsed();
+    let ring = a.trails.ring.iter().zip(&b.trails.ring).map(|(p, q)| (0..4).map(|i| (p[i] - q[i]).abs()).fold(0.0f32, f32::max)).fold(0.0f32, f32::max);
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("handoff"),
+        size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let row = (size.0 * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (row * size.1) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+    let grab = |world: &World, r: &mut Renderer| -> Vec<u8> {
+        r.draw(world, &view);
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        enc.copy_texture_to_buffer(
+            target.as_image_copy(),
+            wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(size.1) } },
+            wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+        );
+        queue.submit(Some(enc.finish()));
+        buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        let mut px = Vec::with_capacity((size.0 * size.1 * 4) as usize);
+        {
+            let data = buf.slice(..).get_mapped_range().expect("map");
+            for y in 0..size.1 as usize {
+                px.extend_from_slice(&data[y * row as usize..y * row as usize + size.0 as usize * 4]);
+            }
+        }
+        buf.unmap();
+        px
+    };
+    let mut ra = Renderer::new(&device, &queue, format, size, 1.0, &a);
+    let mut rb = Renderer::new(&device, &queue, format, size, 1.0, &b);
+    let (fa, fb) = (grab(&a, &mut ra), grab(&b, &mut rb));
+    let (mut worst, mut differing) = (0u8, 0u64);
+    for (p, q) in fa.iter().zip(&fb) {
+        let d = p.abs_diff(*q);
+        worst = worst.max(d);
+        differing += (d > 0) as u64;
+    }
+    image::save_buffer(format!("{prefix}-wallpaper.png"), &fa, size.0, size.1, image::ColorType::Rgba8).expect("save");
+    image::save_buffer(format!("{prefix}-saver-first-frame.png"), &fb, size.0, size.1, image::ColorType::Rgba8).expect("save");
+    println!(
+        "{} seed {}: {} steps rebuilt in {:.0} ms; strands' history differs by at most {:e}; first frame: {} of {} channel values differ, by at most {} of 255",
+        b.system_name(), seed, b.trails.steps, took.as_secs_f64() * 1000.0, ring, differing, fa.len(), worst
+    );
+    // waking up: 3 seconds at the screensaver's own frame rate, a frame saved every half second
+    let frames = (3.0 * saver.fps) as u32;
+    for f in 1..=frames {
+        b.update(1.0 / saver.fps);
+        if f % (saver.fps as u32 / 2).max(1) == 0 {
+            let px = grab(&b, &mut rb);
+            image::save_buffer(format!("{prefix}-wake-{:.1}s.png", f as f32 / saver.fps), &px, size.0, size.1, image::ColorType::Rgba8).expect("save");
+        }
+    }
 }

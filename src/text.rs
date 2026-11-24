@@ -143,10 +143,11 @@ impl Annot {
         v.extend_from_slice(&[q0, q1, q2, q2, q1, q3]);
     }
 
-    /// The tracking boxes: corner brackets around the points the world is following, each with its name and what it
-    /// reads, and faint lines from one box to the next. Laid out every frame (the boxes move); the labels themselves
-    /// change only a few times a second.
+    /// The trackers: on the form only a small anchor mark; out in the empty space beside it a box with the anchor's
+    /// name and what it reads, joined to it by a leader; and a faint line from each box to the next in its column.
+    /// Laid out every frame (anchors move with the camera); the readings change a few times a second.
     pub fn trackers(&self, world: &World, size: (f32, f32)) -> Vec<TextVertex> {
+        use crate::world::{SLOTS, SLOT_SIZE};
         let mut v = Vec::new();
         if world.trackers.is_empty() {
             return v;
@@ -155,50 +156,72 @@ impl Annot {
         let look = &world.look;
         let (view, proj, _) = world.camera(w / h);
         let vp = proj * view;
-        let k = h / 2000.0;
+        let k = (h / 2000.0).max(0.5);
+        let lw = k.round().max(1.0);
         let c = |rgb: [f32; 3], a: f32| [rgb[0], rgb[1], rgb[2], a];
-        // where each box stands on the screen, and how visible it is: boxes keep out of the margins, where the text is
-        let spots: Vec<([f32; 2], f32, &crate::world::Tracker)> = world
+        let lh = (self.px[0] * 1.42).round();
+        let pad = (self.px[0] * 0.55).round();
+        // a box is as large as its text needs, standing at its slot's corner
+        let bw = self.adv[0] * 14.6 + 2.0 * pad;
+        let bh = lh * 5.0 + pad * 1.6;
+        let boxes: Vec<(usize, f32, f32, f32, [f32; 2])> = world
             .trackers
             .iter()
-            .map(|t| {
+            .enumerate()
+            .filter_map(|(i, t)| {
+                let s = t.slot?;
                 let cp = vp * t.pos.extend(1.0);
-                if cp.w < 0.2 {
-                    return ([0.0, 0.0], 0.0, t);
+                if t.alpha <= 0.01 || cp.w < 0.2 {
+                    return None;
                 }
-                let (x, y) = ((cp.x / cp.w * 0.5 + 0.5) * w, (0.5 - cp.y / cp.w * 0.5) * h);
-                let edge = ((x - w * 0.14) / (w * 0.06)).min((w * 0.86 - x) / (w * 0.06)).min((y - h * 0.09) / (h * 0.05)).min((h * 0.91 - y) / (h * 0.05)).clamp(0.0, 1.0);
-                ([x, y], t.alpha * edge, t)
+                let left = SLOTS[s].0 < 0.5;
+                // boxes on the right stand against the slot's right edge
+                let x = if left { SLOTS[s].0 * w } else { (SLOTS[s].0 + SLOT_SIZE.0) * w - bw };
+                Some((i, x.round(), (SLOTS[s].1 * h).round(), t.alpha, [(cp.x / cp.w * 0.5 + 0.5) * w, (0.5 - cp.y / cp.w * 0.5) * h]))
             })
             .collect();
-        // lines first, under the boxes: from each box to the next one that is there
-        for i in 0..spots.len() {
-            let (a, aa, _) = spots[i];
-            let (b, ab, _) = spots[(i + 1) % spots.len()];
-            let s = aa.min(ab);
-            if s > 0.01 && spots.len() > 1 {
-                self.line(&mut v, a, b, 1.1 * k.max(0.6), c(look.text, 0.20 * s));
+        // faint lines from box to box down each column
+        for a in &boxes {
+            let below = boxes.iter().filter(|b| (b.1 - a.1).abs() < 1.0 && b.2 > a.2).min_by(|p, q| p.2.partial_cmp(&q.2).unwrap());
+            if let Some(b) = below {
+                let x = a.1 + (bw * 0.5).round();
+                self.rect(&mut v, x, a.2 + bh + pad, lw, (b.2 - a.2 - bh - 2.0 * pad).max(0.0), c(look.text, 0.2 * a.3.min(b.3)));
             }
         }
-        for (p, a, t) in &spots {
-            if *a <= 0.01 {
-                continue;
+        for &(i, x, y, a, anchor) in &boxes {
+            let t = &world.trackers[i];
+            let left = x < w * 0.5;
+            // the box: corner brackets, a rule under its name, its readings
+            let arm = (pad * 1.1).round();
+            let col = c(look.text, 0.5 * a);
+            for (sx, sy) in [(0.0f32, 0.0f32), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+                let (cx, cy) = (x + sx * bw, y + sy * bh);
+                self.rect(&mut v, if sx < 0.5 { cx } else { cx - arm }, if sy < 0.5 { cy } else { cy - lw }, arm, lw, col);
+                self.rect(&mut v, if sx < 0.5 { cx } else { cx - lw }, if sy < 0.5 { cy } else { cy - arm }, lw, arm, col);
             }
-            let half = (19.0 * t.size * k).round();
-            let arm = (half * 0.42).round().max(2.0);
-            let lw = k.round().max(1.0);
-            let (x, y) = (p[0].round(), p[1].round());
-            let col = c(look.text_hi, 0.42 * a);
-            for (sx, sy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-                let (cx, cy) = (x + sx * half, y + sy * half);
-                self.rect(&mut v, if sx < 0.0 { cx } else { cx - arm }, if sy < 0.0 { cy } else { cy - lw }, arm, lw, col);
-                self.rect(&mut v, if sx < 0.0 { cx } else { cx - lw }, if sy < 0.0 { cy } else { cy - arm }, lw, arm, col);
+            let mut ty = y + pad * 0.6 + self.px[0];
+            self.text(&mut v, &t.tag, 0, x + pad, ty, false, 0.0, c(look.text_hi, 0.7 * a));
+            self.rect(&mut v, x + pad, ty + (self.px[0] * 0.38).round(), bw - 2.0 * pad, lw, c(look.text, 0.28 * a));
+            ty += lh * 1.12;
+            for line in &t.lines {
+                self.text(&mut v, &line.replace('-', "−"), 0, x + pad, ty, false, 0.0, c(look.text, 0.62 * a));
+                ty += lh;
             }
-            // a dot at the point itself
-            self.rect(&mut v, x - lw, y - lw, 2.0 * lw, 2.0 * lw, c(look.text_hi, 0.5 * a));
-            let tx = x + half + self.adv[0] * 0.6;
-            self.text(&mut v, &t.tag, 0, tx, y - half + self.px[0] * 0.72, false, 0.1, c(look.text_hi, 0.5 * a));
-            self.text(&mut v, &t.label.replace('-', "−"), 0, tx, y - half + self.px[0] * 0.72 + (self.px[0] * 1.45).round(), false, 0.0, c(look.text, 0.46 * a));
+            // the leader: a short level run out of the box's inner side, then straight to the anchor
+            let ex = if left { x + bw + pad } else { x - pad };
+            let ey = (y + bh * 0.5).round();
+            let run = w * 0.022 * if left { 1.0 } else { -1.0 };
+            self.rect(&mut v, ex.min(ex + run), ey, run.abs(), lw, c(look.text, 0.32 * a));
+            self.line(&mut v, [ex + run, ey + 0.5 * lw], anchor, 1.1 * k.max(0.6), c(look.text, 0.24 * a));
+            // the anchor: four small ticks around the point, and the point
+            let (px_, py_) = (anchor[0].round(), anchor[1].round());
+            let (gap, tick) = ((5.0 * k).round().max(3.0), (5.0 * k).round().max(2.0));
+            let ac = c(look.text_hi, 0.6 * a);
+            self.rect(&mut v, px_ - gap - tick, py_, tick, lw, ac);
+            self.rect(&mut v, px_ + gap, py_, tick, lw, ac);
+            self.rect(&mut v, px_, py_ - gap - tick, lw, tick, ac);
+            self.rect(&mut v, px_, py_ + gap, lw, tick, ac);
+            self.rect(&mut v, px_ - lw, py_ - lw, 2.0 * lw + lw, 2.0 * lw + lw, c(look.text_hi, 0.7 * a));
         }
         v
     }

@@ -49,6 +49,7 @@ fn main() {
     if args.iter().any(|a| a == "--no-trackers") { cfg.trackers = false }
     if let Some(v) = arg(&args, "--canvas").and_then(|v| v.parse().ok()) { cfg.canvas = v }
     if let Some(v) = arg(&args, "--cycle").and_then(|v| v.parse().ok()) { cfg.cycle = v }
+    if let Some(v) = arg(&args, "--speed").and_then(|v| v.parse().ok()) { cfg.speed = v }
     if let Some(v) = arg(&args, "--orbit").and_then(|v| v.parse().ok()) { cfg.orbit = v }
     if let Some(v) = arg(&args, "--logo") { cfg.logo = v.into() }
     if let Some(v) = arg(&args, "--fps").and_then(|v| v.parse().ok()) { cfg.fps = v }
@@ -96,12 +97,28 @@ fn main() {
         shot::flicker(&cfg, mode, prefix, size, n, cfg.fps, args.iter().any(|a| a == "--hold"), seed);
         return;
     }
+    if args.iter().any(|a| a == "--handoff-test") {
+        // the wallpaper's settings and the screensaver's, with the same look and the same command-line choices
+        let mut wall = Config::load(Mode::Wallpaper);
+        let mut saver = Config::load(Mode::Saver);
+        for c in [&mut wall, &mut saver] {
+            c.preset = arg(&args, "--preset").unwrap_or("dust").into();
+            c.system = cfg.system.clone();
+            // (the tracking boxes keep their own clocks, which are not handed over: leave them out of the comparison)
+            c.trackers = false;
+        }
+        let size = arg(&args, "--size").and_then(|v| v.split_once('x')).and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))).unwrap_or((3200, 2000));
+        let secs = arg(&args, "--secs").and_then(|v| v.parse().ok()).unwrap_or(60.0);
+        shot::handoff_test(&wall, &saver, arg(&args, "--out").unwrap_or("handoff"), size, secs, seed);
+        return;
+    }
     if let Some(path) = arg(&args, "--record") {
         let size = arg(&args, "--size").and_then(|v| v.split_once('x')).and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))).unwrap_or((1920, 1200));
         let secs = arg(&args, "--secs").and_then(|v| v.parse().ok()).unwrap_or(60.0);
         if arg(&args, "--fps").is_none() { cfg.fps = 30.0 }
         // short stays, so a clip shows the attractors changing
         if arg(&args, "--cycle").is_none() { cfg.cycle = 19.0 }
+        if arg(&args, "--speed").is_none() && mode == Mode::Wallpaper { cfg.speed = 0.07 }
         shot::record(&cfg, mode, path, size, secs, seed);
         return;
     }

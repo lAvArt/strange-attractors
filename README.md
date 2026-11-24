@@ -25,8 +25,6 @@ The plugin service starts the wallpaper at login and the screensaver after the s
 
 ## Installing
 
-You'll need the Rust toolchain to build it once.
-
 ```bash
 omarchy plugin add https://github.com/lAvArt/attractor
 cargo build --release --locked --target-dir ~/.cache/attractor/build \
@@ -34,14 +32,55 @@ cargo build --release --locked --target-dir ~/.cache/attractor/build \
 omarchy plugin enable io.github.lavart.attractor
 ```
 
-Try it without the plugin: `attractor --bench 150`, `attractor --windowed`, `attractor --keep` (a screensaver that ignores input), `attractor --wallpaper`, or render a still with
-`attractor --shot out.png --system lorenz --size 1920x1080 --secs 30`.
+The build happens once, on your machine, from the sources in the plugin folder with the dependency versions pinned by
+`Cargo.lock`; nothing is downloaded at runtime and no binary is shipped. Until it is built the service only shows a
+notification saying so.
+
+Try it without the plugin: `attractor --bench 150`, `attractor --windowed`, `attractor --keep` (a screensaver that ignores input), `attractor --wallpaper`, a still with
+`attractor --shot out.png --system lorenz --size 1920x1080 --secs 30`, or a film with `attractor --record out.mp4 --secs 60`.
+
+## Removing
+
+```bash
+omarchy plugin disable io.github.lavart.attractor
+omarchy plugin remove io.github.lavart.attractor
+rm -rf ~/.cache/attractor ~/.config/attractor ~/.local/state/attractor
+```
+
+Disabling stops the wallpaper and, if this plugin had switched Omarchy's stock screensaver off, switches it back on.
+
+## Dependencies
+
+- the **Rust toolchain** (`cargo`), to build once
+- a **Vulkan** GPU and driver (Mesa for Intel and AMD)
+- a Wayland compositor with **wlr-layer-shell** for the wallpaper (Hyprland), and the Omarchy shell (Quickshell) to run
+  the service
+- a **monospace system font** for the annotations: whatever `fc-match monospace` gives (JetBrainsMono Nerd Font on
+  Omarchy), else DejaVu Sans Mono or Liberation Mono; without any, the picture is drawn without text
+- `jq` and `hyprctl` (both part of Omarchy) for the launcher script
+- `ffmpeg`, only for `--record`
+
+It makes no network connections.
+
+## What it changes on your system
+
+- It keeps one background process running, `attractor --wallpaper`, on the bottom layer behind your windows.
+- It takes over the idle screensaver: after the idle timeout it opens its own fullscreen window, and while its
+  screensaver is enabled it switches Omarchy's stock terminal screensaver **off** (through `omarchy-toggle`), noting that
+  it did so in `~/.local/state/attractor/`, which is the only thing it writes. Disabling or removing the plugin switches
+  the stock screensaver back on, if and only if this plugin was what switched it off. With `"saver": "off"`, or while
+  Gridfall is enabled (`"saver": "auto"`), it leaves all of that alone.
+- It reads the active theme's `colors.toml` and its own `~/.config/attractor/config.json`. It never writes either, and
+  it does not touch your Hyprland configuration.
+- `"wallpaper": false` and `"saver": "off"` opt out of either half.
+- It draws on the integrated GPU and tells the Vulkan loader not to load the NVIDIA driver at all, so a hybrid laptop's
+  discrete card stays asleep; `"gpu": "high"` is the opt-in.
 
 ## Looks
 
 | preset | |
 |---|---|
-| `theme` (default) | `stipple` for the wallpaper and `dust` for the screensaver, in the system theme's colours |
+| `theme` (default) | `dust`, in the system theme's colours, for the wallpaper and the screensaver alike |
 | `weave` | a wireframe of the sheet: hairlines along the flow and across it, coming apart into dust where the trails end |
 | `contour` | fine parallel lines along the flow, like the contours of a relief, brightest where the sheet faces the light, with a shallow depth of field |
 | `stipple` | a halftone: dots whose area is the light, each at its own fixed place so nothing beats or shimmers. Nothing is cut off behind a nearer fold: dots there thin and dim smoothly |
@@ -139,8 +178,8 @@ must be converted to paths. Only the shapes and their opacity matter unless you 
   "saver": "auto",
   "wallpaper": true,
   "annotations": true,
-  "wallpaper_options": { "fps": 30, "speed": 0.7 },
-  "saver_options": { "preset": "dust", "fps": 60 }
+  "wallpaper_options": { "change": 150 },
+  "saver_options": { "fps": 60 }
 }
 ```
 
@@ -153,10 +192,13 @@ must be converted to paths. Only the shapes and their opacity matter unless you 
 | `randomize` | `true` | every instance of a system gets parameters of its own (see below); `false`, or `--classic`, keeps the classic ones |
 | `seed` | random | a number from 0 to 65535 fixes the run; the margin shows the seed of the instance on screen, and `--seed N --system NAME` brings it back |
 | `trackers` | `true` | tracking boxes locked onto the system's fixed points and the orbit's farthest reaches, with faint lines between them; `--no-trackers` for one run |
-| `orbit` | 150 / 80 | seconds for the camera to go once round the form (wallpaper / screensaver). Faster reads as more alive; at 20 to 30 frames a second it also makes fine dots step more per frame |
+| `orbit` | 1200 / 80 | seconds for the camera to go once round the form (wallpaper / screensaver) |
+| `speed` | 0.07 / 1 | how fast the strands run: the wallpaper is slow motion |
+| `fps` | 10 / 60 | frames a second (the wallpaper never more than 20 on battery, the screensaver 30) |
+| `change` | 150 / 90 | seconds until the next attractor (`cycle` is the same key) |
+| `handoff` | `true` | the screensaver starts from the scene the wallpaper is showing |
 | `lines` | `true` | `false` drops the hairlines from a look that has them: `dust` is then grains alone |
 | `system` | `cycle` | an attractor's name (`attractor --list`), or `cycle` to rotate through all |
-| `cycle` | 150 / 90 | seconds on each attractor (wallpaper / screensaver) |
 | `saver` | `auto` | `on`, `off`, or `auto`: on unless Gridfall is enabled, so two screensavers never race on idle |
 | `wallpaper` | `true` | run the live wallpaper |
 | `width` | `1` | a multiplier on the look's line and dot sizes: `0.8` is finer, `1.5` bolder. (It used to be a width in pixels; the looks' own weights are now hairlines, about one physical pixel on a 2x panel) |
@@ -165,7 +207,7 @@ must be converted to paths. Only the shapes and their opacity matter unless you 
 | `hidpi` | `true` | wallpaper only: `false` renders at logical pixels and lets the compositor scale (cheaper, softer) |
 | `render_scale` | `1` | draw the scene smaller and scale it up (cheaper, softer) |
 | `overlay` | `false` | wallpaper only: draw over the desktop wallpaper instead of on the look's own ground |
-| `fps`, `speed`, `zoom` | per mode | |
+| `zoom` | `1` | |
 | `gpu` | `low` | `high` uses the discrete GPU; leave it on `low` on hybrid laptops |
 
 `wallpaper_options` and `saver_options` override any of the above for that mode only. `ATTRACTOR_PRESET`,
@@ -187,6 +229,18 @@ then made afresh for that instance, the strands are seeded elsewhere on the shee
 go round the other way, and the rotation runs through all eight systems in an order of its own. The next instance is
 prepared on a thread while the current one fades, so the switch costs no frame. The margins print the values in use.
 `attractor --draws 24` reports how each box fares.
+
+**One scene, two paces.** The wallpaper is a slow-motion photograph of the screensaver's scene: the same look and the
+same strands, at 7% of the speed, ten frames a second, the camera taking twenty minutes to go round, and a new, fully
+formed instance every two and a half minutes. Once a second it writes down what it is showing (system, seed, how many
+steps in, where the camera is, a fingerprint of the strands) in `$XDG_RUNTIME_DIR/attractor/scene.json`. A screensaver
+that starts finds that file, draws the same parameters from the same seed, runs the simulation forward the same number
+of steps (a quarter to half a second), checks the fingerprint, and opens on exactly the picture that was on the desktop;
+then over two seconds it wakes to its own speed and orbit. The simulation is a pure function of system, parameters,
+seed and step count, so the rebuilt strands are bit for bit the wallpaper's: `attractor --handoff-test` compares them
+and the first frame. A file that is missing, older than four seconds (the wallpaper paused behind a fullscreen
+window), from another version or another look, or whose fingerprint does not match, is ignored and the screensaver
+starts a scene of its own. When the screensaver is dismissed the wallpaper carries on with its own scene.
 
 **Ribbons.** Strands are grouped into ribbons of neighbours that start a hair apart along a short curve. Chaos would
 pull them apart exponentially; instead each ribbon is held to a constant width the way a Lyapunov vector is
@@ -235,5 +289,8 @@ pixels jump. `attractor --dark-check` counts pixels where the form made a dark g
 
 Remote control: `omarchy-shell attractor preview` starts the screensaver now, `omarchy-shell attractor status` reports
 the state, `omarchy-shell attractor restart` restarts the wallpaper.
+
+The looks owe their direction to lAvArt's own *Lorenz Deformation* renders and to the plates of Chaotic Atmospheres'
+*Strange Attractors* series; nothing of either is included. No third-party assets are bundled.
 
 MIT licensed.

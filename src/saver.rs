@@ -179,7 +179,7 @@ pub fn run(cfg: Config, seed: u64, windowed: bool, keep: bool) {
     let el = EventLoop::new().expect("event loop");
     let now = Instant::now();
     let mut app = App {
-        world: World::new(&cfg, seed),
+        world: World::start(&cfg, seed),
         cfg,
         windowed,
         keep,

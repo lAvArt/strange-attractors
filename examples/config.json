@@ -15,6 +15,11 @@
   "logo_y": 0.52,
   "logo_opacity": 0.6,
 
-  "wallpaper_options": { "fps": 30, "speed": 0.7, "hidpi": true },
-  "saver_options": { "preset": "dust", "fps": 60 }
+  "annotations": true,
+  "trackers": true,
+  "canvas": 1,
+  "handoff": true,
+
+  "wallpaper_options": { "fps": 10, "speed": 0.07, "orbit": 1200, "change": 150, "hidpi": true },
+  "saver_options": { "fps": 60, "orbit": 80 }
 }

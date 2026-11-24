@@ -37,6 +37,8 @@ pub struct Config {
     pub orbit: f32,
     /// tracking boxes that follow points of the form, and the faint lines between them
     pub trackers: bool,
+    /// the screensaver starts from the scene the wallpaper is showing
+    pub handoff: bool,
     /// a fixed seed, for the same pictures every run (`None`: a new one each start)
     pub seed: Option<u64>,
     /// keep every system at its classic parameters instead of drawing new ones for each instance
@@ -78,7 +80,8 @@ impl Config {
             preset: "theme".into(),
             system: "cycle".into(),
             gpu: "low".into(),
-            fps: if wall { 30.0 } else { 60.0 },
+            // the wallpaper is nearly a still: a slow-motion photograph of the screensaver's scene
+            fps: if wall { 10.0 } else { 60.0 },
             render_scale: None,
             trails: None,
             length: None,
@@ -86,12 +89,13 @@ impl Config {
             palette: "auto".into(),
             annotations: true,
             lines: None,
-            speed: if wall { 0.7 } else { 1.0 },
+            speed: if wall { 0.07 } else { 1.0 },
             width: None,
             zoom: 1.0,
             // slower for the wallpaper: at 20 to 30 frames a second a faster orbit makes fine dots step
-            orbit: if wall { 150.0 } else { 80.0 },
+            orbit: if wall { 1200.0 } else { 80.0 },
             trackers: true,
+            handoff: true,
             seed: None,
             fixed_params: false,
             canvas: 1.0,
@@ -136,6 +140,8 @@ impl Config {
             if let Some(x) = get("trackers").and_then(|x| x.as_bool()) { c.trackers = x }
             if let Some(x) = get("canvas") { c.canvas = x.as_f64().map(|v| v as f32).or(x.as_bool().map(|b| b as u8 as f32)).unwrap_or(1.0) }
             if let Some(x) = f("cycle") { c.cycle = x }
+            if let Some(x) = f("change") { c.cycle = x }
+            if let Some(x) = get("handoff").and_then(|x| x.as_bool()) { c.handoff = x }
             if let Some(x) = f("intensity") { c.intensity = Some(x) }
             if let Some(x) = f("shift_x") { c.shift_x = Some(x) }
             if let Some(x) = f("shift_y") { c.shift_y = x }
@@ -293,7 +299,7 @@ pub fn theme_stamp() -> String {
 
 pub const STYLES: &[&str] = &["weave", "contour", "stipple", "dust", "80s", "90s"];
 /// what `"preset": "theme"` draws: (wallpaper, screensaver)
-const DEFAULT_STYLE: (&str, &str) = ("stipple", "dust");
+const DEFAULT_STYLE: (&str, &str) = ("dust", "dust");
 
 /// The colours of a look: the ground, three tones for the form, an accent.
 struct Pal {
@@ -332,7 +338,7 @@ fn theme_palette(tinted: bool) -> Pal {
         let acc = if lum(accent) > 0.45 { mix(accent, black, 0.45) } else { accent };
         let ink = mix(ink, black, 0.25);
         let c = if tinted { [mix(acc, bg, 0.2), mix(acc, ink, 0.3), mix(acc, ink, 0.8)] } else { [mix(ink, bg, 0.3), mix(ink, bg, 0.08), ink] };
-        Pal { bg_top: bg, bg_bot: mix(bg, darker, 0.6), c, accent: acc, text: mix(ink, bg, 0.3), text_hi: ink, g0: acc, g1: mix(acc, ink, 0.5), vignette: 0.10 }
+        Pal { bg_top: bg, bg_bot: mix(bg, darker, 0.6), c, accent: acc, text: mix(ink, bg, 0.08), text_hi: ink, g0: acc, g1: mix(acc, ink, 0.5), vignette: 0.10 }
     } else {
         let lighter = hex(&g("lighter_background", "#1e1e1e"));
         let darker = hex(&g("darker_background", "#0a0a0a"));
@@ -420,7 +426,7 @@ impl Look {
             // grains scattered through the sheets, with a shallow depth of field
             "dust" => Look {
                 dot: 0.46, dots: Dots::Dust, line: 0.32, line_alpha: 0.26, cross: 0.28, cross_every: 12, sheet: false, shade: 0.7, dof: 5.0, focus: -0.25, scatter: 1.0, sparkle: 0.0025, fog: 0.3, age_pow: 0.35, opacity: 0.9,
-                strands: 16, pitch: 0.016, trails: (336, 688), length: (288, 348),
+                strands: 16, pitch: 0.016, trails: (688, 688), length: (348, 348),
                 ..base(pal(false, Pal {
                     bg_top: hex("#030304"), bg_bot: hex("#000000"),
                     c: [hex("#8f9198"), hex("#e9eaee"), hex("#ffffff")],

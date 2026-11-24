@@ -415,7 +415,11 @@ pub fn run(cfg: Config, seed: u64) {
         layer_shell,
         conn: conn.clone(),
         qh: qh.clone(),
-        world: World::new(&cfg, seed),
+        world: {
+            let mut w = World::new(&cfg, seed);
+            w.publish = cfg.handoff;
+            w
+        },
         cfg,
         instance: gpu::instance(),
         gpu: None,
