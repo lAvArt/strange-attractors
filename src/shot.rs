@@ -132,7 +132,7 @@ pub fn flicker(cfg: &Config, mode: Mode, prefix: &str, size: (u32, u32), frames:
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
     let row = (size.0 * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (row * size.1) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
-    let mut grab = |world: &World, r: &mut Renderer| -> Vec<u8> {
+    let grab = |world: &World, r: &mut Renderer| -> Vec<u8> {
         r.draw(world, &view);
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         enc.copy_texture_to_buffer(
@@ -229,7 +229,7 @@ pub fn dark_check(cfg: &Config, mode: Mode, size: (u32, u32), secs: f32, seed: u
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
     let row = (size.0 * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (row * size.1) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
-    let mut grab = |world: &World, r: &mut Renderer| -> Vec<u8> {
+    let grab = |world: &World, r: &mut Renderer| -> Vec<u8> {
         r.draw(world, &view);
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         enc.copy_texture_to_buffer(

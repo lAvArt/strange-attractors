@@ -80,7 +80,8 @@ pub struct Renderer {
     sheet_unseen: wgpu::RenderPipeline,
     veil_pipe: wgpu::RenderPipeline,
     bgl: wgpu::BindGroupLayout,
-    blank: wgpu::TextureView,
+    /// a stand-in for the veil in the passes that do not read one (kept alive for their bind groups)
+    _blank: wgpu::TextureView,
     soft: bool,
     flow: Layer,
     cross: Layer,
@@ -331,7 +332,7 @@ impl Renderer {
             sheet_unseen,
             veil_pipe,
             bgl,
-            blank,
+            _blank: blank,
             soft: world.look.soft > 0.0,
             flow,
             cross,
