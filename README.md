@@ -14,7 +14,7 @@ minutes one attractor fades out and the next grows in.
 
 - **Wallpaper** (`attractor --wallpaper`): a `wlr-layer-shell` surface on the *bottom* layer, above Omarchy's own
   background and below every window. Clicks pass straight through to the desktop. It renders at the panel's native
-  resolution, at 30 fps (20 on battery), and **pauses itself** when it cannot be seen: a fullscreen window, a locked session, or a
+  resolution, in slow motion at 10 fps, and **pauses itself** when it cannot be seen: a fullscreen window, a locked session, or a
   sleeping monitor.
 - **Screensaver** (`attractor`): a fullscreen window using Omarchy's screensaver class, so the idle service still locks on
   time; any key, click or mouse movement dismisses it, and so does losing focus (a workspace switch), so a saver nobody can

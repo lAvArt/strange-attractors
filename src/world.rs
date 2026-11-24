@@ -77,8 +77,6 @@ pub struct World {
     acc: f32,
     seed: u64,
     cycling: bool,
-    /// where on its path the camera starts: different each run
-    cam_phase: f32,
     /// hold the camera still (the flicker test: with the camera held, nothing that is drawn should change at all
     /// from one frame to the next except the growing heads and fading tails)
     pub hold_camera: bool,
@@ -137,7 +135,7 @@ impl World {
         };
         let turn = if (seed >> 3) & 1 == 0 { 1.0 } else { -1.0 };
         let cam_phase = (seed % 1000) as f32;
-        World { cfg: cfg.clone(), from_look: look.clone(), target_look: look.clone(), blend: 1.0, theme_stamp: crate::config::theme_stamp(), theme_poll: 0.0, look, trails, logo: logo::load(&cfg.logo), t: 0.0, fade: 1.0, epoch: 0, order, idx: 0, since: 0.0, phase: Phase::Run, acc: 0.0, seed, cycling, cam_phase, hold_camera: false, cam_angle: turn * cam_phase * std::f32::consts::TAU / 80.0, cam_clock: cam_phase, wake: 1.0, from_speed: cfg.speed, from_orbit: cfg.orbit, publish: false, publish_poll: 0.0, reach: 1.0, reach_goal: 1.0, reach_poll: 0.0, trackers: World::make_trackers(cfg, seed), track_poll: 0.0, slot_busy: [false; SLOTS.len()], pending: None, blocking: false, turn }
+        World { cfg: cfg.clone(), from_look: look.clone(), target_look: look.clone(), blend: 1.0, theme_stamp: crate::config::theme_stamp(), theme_poll: 0.0, look, trails, logo: logo::load(&cfg.logo), t: 0.0, fade: 1.0, epoch: 0, order, idx: 0, since: 0.0, phase: Phase::Run, acc: 0.0, seed, cycling, hold_camera: false, cam_angle: turn * cam_phase * std::f32::consts::TAU / 80.0, cam_clock: cam_phase, wake: 1.0, from_speed: cfg.speed, from_orbit: cfg.orbit, publish: false, publish_poll: 0.0, reach: 1.0, reach_goal: 1.0, reach_poll: 0.0, trackers: World::make_trackers(cfg, seed), track_poll: 0.0, slot_busy: [false; SLOTS.len()], pending: None, blocking: false, turn }
     }
 
     /// A new instance of system `sys`: parameters of its own (drawn and tested by `systems::draw`), fitted and framed
