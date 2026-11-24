@@ -1,4 +1,4 @@
-# Attractor
+# Strange Attractors
 
 Strange attractors as a **live wallpaper** and a **screensaver** for [Omarchy](https://omarchy.org), by lAvArt Studio.
 
@@ -26,7 +26,7 @@ The plugin service starts the wallpaper at login and the screensaver after the s
 ## Installing
 
 ```bash
-omarchy plugin add https://github.com/lAvArt/attractor
+omarchy plugin add https://github.com/lAvArt/strange-attractors
 cargo build --release --locked --target-dir ~/.cache/attractor/build \
   --manifest-path ~/.config/omarchy/plugins/io.github.lavart.attractor/Cargo.toml
 omarchy plugin enable io.github.lavart.attractor
@@ -188,7 +188,7 @@ must be converted to paths. Only the shapes and their opacity matter unless you 
 | `preset` | `theme` | see Looks |
 | `palette` | `auto` | `theme`, `original`, or `auto` (the theme, except for `80s` and `90s`) |
 | `annotations` | `true` | the equations and live numbers in the margins |
-| `canvas` | `1` | 0 to 1: how much the picture is a work on paper (the ground's tooth and hand-laid wash, marks that catch on that tooth, strokes of uneven pressure, blooms with pooled edges). `0` is the clean look. Not applied to `80s` and `90s` |
+| `canvas` | `0` | 0 to 1: how much the picture is a work on paper (the ground's tooth and hand-laid wash, marks that catch on that tooth, strokes of uneven pressure, blooms with pooled edges). `0` (the default) is the clean look; raise it for a paper-like surface. Not applied to `80s` and `90s` |
 | `randomize` | `true` | every instance of a system gets parameters of its own (see below); `false`, or `--classic`, keeps the classic ones |
 | `seed` | random | a number from 0 to 65535 fixes the run; the margin shows the seed of the instance on screen, and `--seed N --system NAME` brings it back |
 | `trackers` | `true` | tracking boxes locked onto the system's fixed points and the orbit's farthest reaches, with faint lines between them; `--no-trackers` for one run |

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "io.github.lavart.attractor",
-  "name": "Attractor",
+  "name": "Strange Attractors",
   "version": "0.1.0",
   "author": "lAvArt Studio",
   "description": "Strange attractors (Lorenz, Aizawa, Halvorsen and more) as a GPU live wallpaper and screensaver.",

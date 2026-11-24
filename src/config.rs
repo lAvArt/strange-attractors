@@ -98,7 +98,7 @@ impl Config {
             handoff: true,
             seed: None,
             fixed_params: false,
-            canvas: 1.0,
+            canvas: 0.0,
             cycle: if wall { 150.0 } else { 90.0 },
             intensity: None,
             overlay: false,
