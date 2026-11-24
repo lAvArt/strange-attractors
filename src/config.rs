@@ -26,6 +26,21 @@ pub struct Config {
     pub bloom: Option<f32>,
     /// wallpaper only: draw the trails with transparency over the desktop wallpaper instead of on their own ground
     pub overlay: bool,
+    /// "none", "twinise", "omarchy", or the path of an SVG
+    pub logo: String,
+    /// "outline", "fill" or "both"
+    pub logo_style: String,
+    /// "auto" (the look's own colour), "accent" / "foreground" (your theme), "svg" (the SVG's colours) or "#rrggbb"
+    pub logo_color: String,
+    /// the longer side of the logo, as a fraction of the screen height
+    pub logo_size: f32,
+    /// the logo's centre, as fractions of the screen width and height
+    pub logo_x: f32,
+    pub logo_y: f32,
+    pub logo_opacity: f32,
+    /// slides the attractor sideways (and up) in screen space, in units of half the screen: `None` makes room for a logo
+    pub shift_x: Option<f32>,
+    pub shift_y: f32,
 }
 
 pub fn home() -> String {
@@ -50,6 +65,15 @@ impl Config {
             intensity: None,
             bloom: None,
             overlay: false,
+            logo: "none".into(),
+            logo_style: "both".into(),
+            logo_color: "auto".into(),
+            logo_size: 0.56,
+            logo_x: 0.66,
+            logo_y: 0.52,
+            logo_opacity: 0.6,
+            shift_x: None,
+            shift_y: 0.0,
         };
         let path = std::env::var("ATTRACTOR_CONFIG").unwrap_or_else(|_| format!("{}/.config/attractor/config.json", home()));
         if let Some(v) = std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) {
@@ -71,12 +95,22 @@ impl Config {
             if let Some(x) = f("cycle") { c.cycle = x }
             if let Some(x) = f("intensity") { c.intensity = Some(x) }
             if let Some(x) = f("bloom") { c.bloom = Some(x) }
+            if let Some(x) = f("shift_x") { c.shift_x = Some(x) }
+            if let Some(x) = f("shift_y") { c.shift_y = x }
+            if let Some(x) = s("logo") { c.logo = x }
+            if let Some(x) = s("logo_style") { c.logo_style = x }
+            if let Some(x) = s("logo_color") { c.logo_color = x }
+            if let Some(x) = f("logo_size") { c.logo_size = x }
+            if let Some(x) = f("logo_x") { c.logo_x = x }
+            if let Some(x) = f("logo_y") { c.logo_y = x }
+            if let Some(x) = f("logo_opacity") { c.logo_opacity = x }
             if let Some(x) = get("overlay").and_then(|x| x.as_bool()) { c.overlay = x }
         }
         let e = |k: &str| std::env::var(k).ok();
         if let Some(x) = e("ATTRACTOR_PRESET") { c.preset = x }
         if let Some(x) = e("ATTRACTOR_SYSTEM") { c.system = x }
         if let Some(x) = e("ATTRACTOR_GPU") { c.gpu = x }
+        if let Some(x) = e("ATTRACTOR_LOGO") { c.logo = x }
         c.trails = c.trails.clamp(8, 4096);
         c.length = c.length.clamp(16, 4096);
         c
@@ -114,6 +148,8 @@ pub struct Look {
     pub vignette: f32,
     pub exposure: f32,
     pub age_pow: f32,
+    /// the logo's colour; `None` keeps the SVG's own colours
+    pub logo_tint: Option<[f32; 3]>,
 }
 
 fn theme_colors() -> Option<Vec<(String, String)>> {
@@ -151,6 +187,29 @@ impl Look {
                     vignette: 0.55,
                     exposure: 1.2,
                     age_pow: 1.5,
+                    logo_tint: None,
+                }
+            }
+            // flat, matte lines in the theme's accent on its background: no glow, no additive white-out
+            "matte" => {
+                let th = theme_colors().unwrap_or_default();
+                let g = |k: &str, d: &str| th.iter().find(|(a, _)| a == k).map(|(_, v)| v.clone()).unwrap_or_else(|| d.to_string());
+                let bg = hex(&g("background", "#101014"));
+                let dark = hex(&g("darker_background", "#08080a"));
+                let accent = hex(&g("accent", "#e68e0d"));
+                let bright = hex(&g("bright_foreground", "#eaeaea"));
+                Look {
+                    bg_top: bg,
+                    bg_bot: dark,
+                    c: [mix(accent, bg, 0.6), accent, mix(accent, bright, 0.45)],
+                    over: true,
+                    bloom: 0.0,
+                    width: 1.7,
+                    intensity: 0.85,
+                    vignette: 0.25,
+                    exposure: 1.0,
+                    age_pow: 0.9,
+                    logo_tint: None,
                 }
             }
             // the look of the Lorenz Deformation renders: amber light over teal-green concrete
@@ -165,6 +224,7 @@ impl Look {
                 vignette: 0.6,
                 exposure: 1.2,
                 age_pow: 1.2,
+                logo_tint: None,
             },
             "lavart" => Look {
                 bg_top: hex("#05070b"),
@@ -177,6 +237,35 @@ impl Look {
                 vignette: 0.6,
                 exposure: 1.35,
                 age_pow: 1.5,
+                logo_tint: None,
+            },
+            // pale brushed-metal ribbons on white paper, after the Strange Attractors poster series: soft, no glow
+            "pale" => Look {
+                bg_top: hex("#f6f5f2"),
+                bg_bot: hex("#e9e8e3"),
+                c: [hex("#cfd2d4"), hex("#aaa49a"), hex("#80858b")],
+                over: true,
+                bloom: 0.0,
+                width: 3.0,
+                intensity: 0.92,
+                vignette: 0.10,
+                exposure: 1.0,
+                age_pow: 0.7,
+                logo_tint: None,
+            },
+            // dark grey shades on the same pale studio ground: charcoal heads fading to soft grey tails
+            "graphite" => Look {
+                bg_top: hex("#f6f5f2"),
+                bg_bot: hex("#e9e8e3"),
+                c: [hex("#9a9c9f"), hex("#55585c"), hex("#222427")],
+                over: true,
+                bloom: 0.0,
+                width: 2.8,
+                intensity: 0.95,
+                vignette: 0.10,
+                exposure: 1.0,
+                age_pow: 0.8,
+                logo_tint: None,
             },
             "ink" => Look {
                 bg_top: hex("#f4f3ef"),
@@ -189,6 +278,7 @@ impl Look {
                 vignette: 0.12,
                 exposure: 1.0,
                 age_pow: 0.8,
+                logo_tint: None,
             },
             // "neon" and anything unknown
             _ => Look {
@@ -202,11 +292,21 @@ impl Look {
                 vignette: 0.6,
                 exposure: 1.35,
                 age_pow: 1.5,
+                logo_tint: None,
             },
         };
         if let Some(w) = cfg.width { l.width = w }
         if let Some(i) = cfg.intensity { l.intensity = i }
         if let Some(b) = cfg.bloom { l.bloom = b }
+        l.logo_tint = match cfg.logo_color.as_str() {
+            "svg" => None,
+            "accent" | "foreground" => {
+                let th = theme_colors().unwrap_or_default();
+                th.iter().find(|(k, _)| k == cfg.logo_color.as_str()).map(|(_, v)| hex(v)).or(Some(l.c[1]))
+            }
+            c if c.starts_with('#') => Some(hex(c)),
+            _ => Some(l.c[1]),
+        };
         l
     }
 }

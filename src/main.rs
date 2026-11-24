@@ -2,6 +2,7 @@
 
 mod config;
 mod gpu;
+mod logo;
 mod render;
 mod saver;
 mod shot;
@@ -20,8 +21,8 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "attractor [--wallpaper | --windowed] [--system NAME|cycle] [--preset theme|neon|lavart|deformation|ink]\n\
-             \x20         [--fps N] [--scale F] [--shot out.png [--size WxH] [--secs N]] [--list]"
+            "attractor [--wallpaper | --windowed | --keep] [--system NAME|cycle] [--preset theme|matte|pale|graphite|neon|lavart|deformation|ink]\n\
+             \x20         [--logo none|twinise|omarchy|FILE.svg] [--fps N] [--scale F] [--shot out.png [--size WxH] [--secs N]] [--list]"
         );
         return;
     }
@@ -35,6 +36,7 @@ fn main() {
     let mut cfg = Config::load(mode);
     if let Some(v) = arg(&args, "--system") { cfg.system = v.into() }
     if let Some(v) = arg(&args, "--preset") { cfg.preset = v.into() }
+    if let Some(v) = arg(&args, "--logo") { cfg.logo = v.into() }
     if let Some(v) = arg(&args, "--fps").and_then(|v| v.parse().ok()) { cfg.fps = v }
     if let Some(v) = arg(&args, "--scale").and_then(|v| v.parse().ok()) { cfg.render_scale = Some(v) }
     gpu::prepare_env(&cfg);
@@ -47,7 +49,7 @@ fn main() {
         return;
     }
     match mode {
-        Mode::Saver => saver::run(cfg, seed, args.iter().any(|a| a == "--windowed")),
+        Mode::Saver => saver::run(cfg, seed, args.iter().any(|a| a == "--windowed"), args.iter().any(|a| a == "--keep")),
         Mode::Wallpaper => wallpaper::run(cfg, seed),
     }
 }

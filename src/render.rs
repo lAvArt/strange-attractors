@@ -27,6 +27,8 @@ struct Pass {
     bg0: [f32; 4],
     bg1: [f32; 4],
     ex: [f32; 4],
+    lg: [f32; 4],
+    lt: [f32; 4],
 }
 
 struct Targets {
@@ -52,6 +54,9 @@ pub struct Renderer {
     ring: wgpu::Buffer,
     pp_bgl: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    logo_view: wgpu::TextureView,
+    /// the logo's aspect ratio (w/h), 0 without a logo
+    logo_aspect: f32,
     down: wgpu::RenderPipeline,
     blur: wgpu::RenderPipeline,
     comp: wgpu::RenderPipeline,
@@ -86,20 +91,20 @@ fn pass_buf(device: &wgpu::Device, p: Pass) -> wgpu::Buffer {
     })
 }
 
-fn build_targets(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, w: u32, h: u32) -> Targets {
+fn build_targets(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, logo: &wgpu::TextureView, w: u32, h: u32) -> Targets {
     let (w1, h1) = ((w / 4).max(1), (h / 4).max(1));
     let (w2, h2) = ((w1 / 4).max(1), (h1 / 4).max(1));
     let scene = tex(device, w, h);
     let (l1a, l1b, l2a, l2b) = (tex(device, w1, h1), tex(device, w1, h1), tex(device, w2, h2), tex(device, w2, h2));
     let z = [0.0; 4];
-    let p = |v: [f32; 4]| pass_buf(device, Pass { v, bg0: z, bg1: z, ex: z });
+    let p = |v: [f32; 4]| pass_buf(device, Pass { v, bg0: z, bg1: z, ex: z, lg: z, lt: z });
     let u_down1 = p([1.0 / w as f32, 1.0 / h as f32, 0.55, 0.0]);
     let u_bh1 = p([1.0 / w1 as f32, 0.0, 0.0, 0.0]);
     let u_bv1 = p([0.0, 1.0 / h1 as f32, 0.0, 0.0]);
     let u_down2 = p([1.0 / w1 as f32, 1.0 / h1 as f32, 0.0, 0.0]);
     let u_bh2 = p([1.0 / w2 as f32, 0.0, 0.0, 0.0]);
     let u_bv2 = p([0.0, 1.0 / h2 as f32, 0.0, 0.0]);
-    let comp_buf = pass_buf(device, Pass { v: z, bg0: z, bg1: z, ex: z });
+    let comp_buf = pass_buf(device, Pass { v: z, bg0: z, bg1: z, ex: z, lg: z, lt: z });
     let bg = |src: &wgpu::TextureView, u: &wgpu::Buffer, t1: &wgpu::TextureView, t2: &wgpu::TextureView| {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
@@ -110,6 +115,7 @@ fn build_targets(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, sampler: &w
                 wgpu::BindGroupEntry { binding: 2, resource: u.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(t1) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(t2) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(logo) },
             ],
         })
     };
@@ -229,6 +235,7 @@ impl Renderer {
                 },
                 tex_entry(3),
                 tex_entry(4),
+                tex_entry(5),
             ],
         });
         let pp_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&pp_bgl)], immediate_size: 0 });
@@ -258,7 +265,30 @@ impl Renderer {
             ..Default::default()
         });
         let (sw, sh) = (((out.0 as f32 * scale) as u32).max(1), ((out.1 as f32 * scale) as u32).max(1));
-        let t = build_targets(device, &pp_bgl, &sampler, sw, sh);
+        // the logo's mask: a 1x1 transparent texel when there is none, so every pass can bind the same layout
+        let (lw, lh, ldata): (u32, u32, &[u8]) = match &world.logo {
+            Some(l) => (l.w, l.h, &l.rgba),
+            None => (1, 1, &[0, 0, 0, 0]),
+        };
+        let logo_view = device
+            .create_texture_with_data(
+                queue,
+                &wgpu::TextureDescriptor {
+                    label: Some("logo"),
+                    size: wgpu::Extent3d { width: lw, height: lh, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                },
+                wgpu::util::TextureDataOrder::LayerMajor,
+                ldata,
+            )
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let logo_aspect = world.logo.as_ref().map(|l| l.w as f32 / l.h as f32).unwrap_or(0.0);
+        let t = build_targets(device, &pp_bgl, &sampler, &logo_view, sw, sh);
         Renderer {
             device: device.clone(),
             queue: queue.clone(),
@@ -272,6 +302,8 @@ impl Renderer {
             comp: pp_make("fs_comp", format),
             pp_bgl,
             sampler,
+            logo_view,
+            logo_aspect,
             t,
             out,
             n,
@@ -287,7 +319,7 @@ impl Renderer {
         }
         self.out = out;
         let (sw, sh) = (((out.0 as f32 * self.scale) as u32).max(1), ((out.1 as f32 * self.scale) as u32).max(1));
-        self.t = build_targets(&self.device, &self.pp_bgl, &self.sampler, sw, sh);
+        self.t = build_targets(&self.device, &self.pp_bgl, &self.sampler, &self.logo_view, sw, sh);
     }
 
     /// copy the points this renderer has not seen yet into the GPU ring
@@ -330,12 +362,27 @@ impl Renderer {
         };
         self.queue.write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&frame));
         let bloom = if look.over { 0.0 } else { look.bloom };
-        let b4 = |c: [f32; 3]| [c[0], c[1], c[2], 1.0];
+        let b4 = |c: [f32; 3], w: f32| [c[0], c[1], c[2], w];
+        let cfg = &world.cfg;
+        let style = if self.logo_aspect <= 0.0 {
+            0.0
+        } else {
+            match cfg.logo_style.as_str() {
+                "outline" => 1.0,
+                "fill" => 2.0,
+                _ => 3.0,
+            }
+        };
+        let tint = look.logo_tint.unwrap_or([1.0; 3]);
         let comp = Pass {
             v: [look.over as u32 as f32, bloom, look.vignette, world.t],
-            bg0: b4(look.bg_top),
-            bg1: b4(look.bg_bot),
-            ex: [look.exposure, world.cfg.overlay as u32 as f32, 0.0, 0.0],
+            // bg0.w: the logo keeps its own SVG colours
+            bg0: b4(look.bg_top, look.logo_tint.is_none() as u32 as f32),
+            bg1: b4(look.bg_bot, 0.0),
+            ex: [look.exposure, cfg.overlay as u32 as f32, style, self.out.1 as f32],
+            // a wide logo is sized by its width, so it never outgrows the screen
+            lg: [cfg.logo_x, cfg.logo_y, cfg.logo_size / self.logo_aspect.max(1.0), self.logo_aspect.max(0.01)],
+            lt: [tint[0], tint[1], tint[2], cfg.logo_opacity],
         };
         self.queue.write_buffer(&self.t.comp_buf, 0, bytemuck::bytes_of(&comp));
 

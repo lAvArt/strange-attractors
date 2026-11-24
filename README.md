@@ -31,20 +31,51 @@ cargo build --release --locked --target-dir ~/.cache/attractor/build \
 omarchy plugin enable io.github.lavart.attractor
 ```
 
-Try it without the plugin: `attractor --windowed`, `attractor --wallpaper`, or render a still with
+Try it without the plugin: `attractor --windowed`, `attractor --keep` (a screensaver that ignores input), `attractor --wallpaper`, or render a still with
 `attractor --shot out.png --system lorenz --size 1920x1080 --secs 30`.
 
 ## Looks
 
 | preset | |
 |---|---|
-| `theme` (default) | the active Omarchy theme: its accent as the light, its background as the ground |
+| `theme` (default) | glowing light in the active Omarchy theme: its accent as the light, its background as the ground |
+| `matte` | the same theme colours as flat, matte lines: no glow, no additive white-out |
+| `pale` | pale brushed-metal ribbons on white paper, after the *Strange Attractors* poster series |
+| `graphite` | dark grey shades, charcoal to soft grey, on the same pale studio ground |
 | `neon` | violet to cyan to pink light on near-black |
 | `lavart` | the Twinise cyan |
 | `deformation` | amber light over teal-green concrete, after the *Lorenz Deformation* renders |
-| `ink` | dark ink on white paper, after the *Strange Attractors* poster series |
+| `ink` | stark dark ink on white paper |
 
 ![Presets](docs/media/presets.jpg)
+
+## Your logo
+
+Put a mark of your own on the wallpaper and the screensaver. It sits quietly behind the trails as a hairline outline over
+a faint fill, in a colour taken from the look, and the attractor slides aside to make room for it.
+
+```json
+{
+  "logo": "~/Pictures/my-logo.svg",
+  "logo_style": "both",
+  "logo_color": "auto",
+  "logo_size": 0.56,
+  "logo_x": 0.66,
+  "logo_y": 0.52
+}
+```
+
+`logo` is the path of an SVG, or `"twinise"` / `"omarchy"` for the built-in marks (`"none"` is the default). Text in the SVG
+must be converted to paths. Only the shapes and their opacity matter unless you set `"logo_color": "svg"`.
+
+| key | default | |
+|---|---|---|
+| `logo_style` | `both` | `outline`, `fill` or `both` |
+| `logo_color` | `auto` | `auto` (the look's own colour), `accent` or `foreground` (your theme), `svg` (the SVG's colours) or `#rrggbb` |
+| `logo_size` | `0.56` | the logo's longer side, as a fraction of the screen height |
+| `logo_x`, `logo_y` | `0.66`, `0.52` | the logo's centre, as fractions of the screen |
+| `logo_opacity` | `0.6` | |
+| `shift_x`, `shift_y` | `-0.3` with a logo, else `0` | slides the attractor sideways / up, in units of half the screen |
 
 ## Configuration
 

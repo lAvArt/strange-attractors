@@ -1,9 +1,10 @@
 //! The living scene: trails on the current attractor, the orbiting camera, and the slow rotation through systems.
 
 use crate::config::{Config, Look};
+use crate::logo::{self, Logo};
 use crate::systems;
 use crate::trails::Trails;
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec3, Vec4};
 
 enum Phase {
     Run,
@@ -21,6 +22,7 @@ pub struct World {
     pub cfg: Config,
     pub look: Look,
     pub trails: Trails,
+    pub logo: Option<Logo>,
     pub t: f32,
     pub fade: f32,
     /// bumps whenever the trails are replaced, so renderers know to re-upload everything
@@ -42,7 +44,7 @@ impl World {
         let order: Vec<usize> = (0..systems::ALL.len()).map(|i| (first + i) % systems::ALL.len()).collect();
         let look = Look::resolve(cfg);
         let trails = Trails::new(systems::ALL[order[0]], cfg.trails, cfg.length, seed, true);
-        World { cfg: cfg.clone(), look, trails, t: 0.0, fade: 1.0, epoch: 0, order, idx: 0, since: 0.0, phase: Phase::Run, acc: 0.0, seed, cycling }
+        World { cfg: cfg.clone(), look, trails, logo: logo::load(&cfg.logo), t: 0.0, fade: 1.0, epoch: 0, order, idx: 0, since: 0.0, phase: Phase::Run, acc: 0.0, seed, cycling }
     }
 
     pub fn system_name(&self) -> &'static str {
@@ -102,6 +104,9 @@ impl World {
         let view = Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y);
         let fov = 38f32.to_radians();
         let proj = Mat4::perspective_rh(fov, aspect, 0.2, 40.0);
-        (proj * view, dist)
+        // slide the picture in screen space (added to clip x/y in proportion to w), to leave room for the logo
+        let dx = self.cfg.shift_x.unwrap_or(if self.logo.is_some() { -0.3 } else { 0.0 });
+        let shift = Mat4::from_cols(Vec4::X, Vec4::Y, Vec4::Z, Vec4::new(dx, self.cfg.shift_y, 0.0, 1.0));
+        (shift * proj * view, dist)
     }
 }

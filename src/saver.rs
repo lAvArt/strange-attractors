@@ -25,6 +25,8 @@ struct App {
     cfg: Config,
     world: World,
     windowed: bool,
+    /// ignore input (for testing: the saver normally quits on any key, click or real mouse movement)
+    keep: bool,
     gfx: Option<Gfx>,
     last: Instant,
     next_frame: Instant,
@@ -126,7 +128,7 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, ev: WindowEvent) {
-        let live = !self.windowed && Instant::now() > self.grace_until;
+        let live = !self.windowed && !self.keep && Instant::now() > self.grace_until;
         match ev {
             WindowEvent::CloseRequested => el.exit(),
             WindowEvent::Resized(s) => {
@@ -169,13 +171,14 @@ impl ApplicationHandler for App {
     }
 }
 
-pub fn run(cfg: Config, seed: u64, windowed: bool) {
+pub fn run(cfg: Config, seed: u64, windowed: bool, keep: bool) {
     let el = EventLoop::new().expect("event loop");
     let now = Instant::now();
     let mut app = App {
         world: World::new(&cfg, seed),
         cfg,
         windowed,
+        keep,
         gfx: None,
         last: now,
         next_frame: now,

@@ -1,0 +1,8 @@
+<!-- The Twinise mark (2048 viewBox), as used by lAvArt Studio. As an Attractor logo only each shape's shape and
+     opacity matter by default (the colour follows your theme); set "logo_color": "svg" to keep these colours. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048">
+  <polygon points="0,483.65 1564.35,483.65 2048,0 483.64,0" fill="#bebebe"/>
+  <polygon points="1549.67,597.76 1550.06,1394.23 896.32,2048 896.32,1251.11" fill="#e68e0d"/>
+  <polygon points="1450.24,597.76 1450.63,1379.48 782.14,2048 782.14,1265.86" fill="#e68e0d" opacity="0.6"/>
+  <polygon points="2048,30.90 2048,68.57 896.16,1220.43 896.16,1182.74" fill="#ffc780"/>
+</svg>
