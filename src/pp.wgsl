@@ -186,6 +186,8 @@ fn vs_text(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2)
 
 @fragment
 fn fs_text(i: TOut) -> @location(0) vec4<f32> {
-    let a = textureSampleLevel(t0, samp, i.uv, 0.0).r * i.col.a * scan(i.pos.y);
+    var a = textureSampleLevel(t0, samp, i.uv, 0.0).r * i.col.a * scan(i.pos.y);
+    // dark text on a light ground is strengthened for the same reason the form's ink is (see `ink` in shader.wgsl)
+    if (p.g0.w > 1.0) { a = 1.0 - pow(max(1.0 - a, 0.0), p.g0.w); }
     return vec4<f32>(i.col.rgb * a, a);
 }

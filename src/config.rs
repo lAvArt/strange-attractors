@@ -230,6 +230,8 @@ pub struct Look {
     /// air around the form (0: none)
     pub grain: f32,
     pub motes: f32,
+    /// how much the marks' coverage is strengthened: 1 on dark grounds, more for dark ink on a light one
+    pub ink: f32,
     /// 0..1: how much the picture is a work on paper (the ground's tooth and hand-laid wash, marks that catch on
     /// that tooth, strokes of uneven pressure)
     pub canvas: f32,
@@ -337,7 +339,8 @@ fn theme_palette(tinted: bool) -> Pal {
         // an accent too pale to read on paper is deepened
         let acc = if lum(accent) > 0.45 { mix(accent, black, 0.45) } else { accent };
         let ink = mix(ink, black, 0.25);
-        let c = if tinted { [mix(acc, bg, 0.2), mix(acc, ink, 0.3), mix(acc, ink, 0.8)] } else { [mix(ink, bg, 0.3), mix(ink, bg, 0.08), ink] };
+        // graphite: mid-grey in shade through near-black in the light
+        let c = if tinted { [mix(acc, bg, 0.2), mix(acc, ink, 0.3), mix(acc, ink, 0.8)] } else { [mix(ink, bg, 0.42), mix(ink, bg, 0.14), ink] };
         Pal { bg_top: bg, bg_bot: mix(bg, darker, 0.6), c, accent: acc, text: mix(ink, bg, 0.08), text_hi: ink, g0: acc, g1: mix(acc, ink, 0.5), vignette: 0.10 }
     } else {
         let lighter = hex(&g("lighter_background", "#1e1e1e"));
@@ -398,7 +401,7 @@ impl Look {
             name,
             bg_top: p.bg_top, bg_bot: p.bg_bot, c: p.c, accent: p.accent, text: p.text, text_hi: p.text_hi, g0: p.g0, g1: p.g1, vignette: p.vignette,
             line: 0.0, line_alpha: 1.0, cross: 0.0, cross_every: 1, dot: 0.0, dots: Dots::Dust, dot_every: 1,
-            sheet: true, soft: 0.0, wash: 0.0, ribbon_colours: false, scan: 0.0, grain: 1.1, motes: 0.16, canvas: 1.0, ground: 0, pixel: 0, quant: 0.0, chunk: 1,
+            sheet: true, soft: 0.0, wash: 0.0, ribbon_colours: false, scan: 0.0, grain: 1.1, motes: 0.16, ink: 1.0, canvas: 1.0, ground: 0, pixel: 0, quant: 0.0, chunk: 1,
             shade: 0.8, dof: 0.0, focus: 0.0, dissolve: 2.0, scatter: 0.0, sparkle: 0.0, fog: 0.5, age_pow: 0.45, opacity: 1.0,
             strands: 24, pitch: 0.011, trails: (720, 1200), length: (400, 480), logo_tint: None,
         };
@@ -469,6 +472,9 @@ impl Look {
             l.line *= w;
             l.cross *= w;
             l.dot *= w;
+        }
+        if lum(l.bg_top) > 0.4 && name != "80s" && name != "90s" {
+            l.ink = 6.5;
         }
         l.canvas *= cfg.canvas.clamp(0.0, 1.0);
         if l.canvas > 0.0 {

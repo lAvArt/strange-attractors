@@ -527,7 +527,7 @@ impl Renderer {
             fog: b4(fogc, look.fog),
             acc: b4(look.accent, look.canvas),
             ids: [n, len, world.trails.head as u32, m],
-            p1: [world.fade, fresh as f32, world.t, look.age_pow],
+            p1: [world.fade, fresh as f32, look.ink, look.age_pow],
             // view units per pixel at depth 1: 2 / (height * proj[1][1])
             p2: [dist, 2.0 / (sh * proj.y_axis.y), sh, stride as f32],
             st: [look.shade, look.dof, look.dissolve, look.scatter],
@@ -570,7 +570,7 @@ impl Renderer {
             // a wide logo is sized by its width, so it never outgrows the screen
             lg: [cfg.logo_x, cfg.logo_y, cfg.logo_size / self.logo_aspect.max(1.0), self.logo_aspect.max(0.01)],
             lt: [tint[0], tint[1], tint[2], cfg.logo_opacity],
-            g0: b4(look.g0, 0.0),
+            g0: b4(look.g0, 1.0 + 0.28 * (look.ink - 1.0)),
             g1: b4(look.g1, 0.0),
             q: [look.quant, self.t.k as f32, look.scan, look.grain],
         };

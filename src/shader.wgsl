@@ -15,7 +15,7 @@ struct U {
     fog: vec4<f32>,   // the ground colour far things sink into; w: how much
     acc: vec4<f32>,   // sparkles; w: how much the marks are drawn as on paper (0: clean)
     ids: vec4<u32>,   // n strands, ring length, head slot, strands per ribbon
-    p1: vec4<f32>,    // fade, points drawn one by one before every other is skipped, time, tail power
+    p1: vec4<f32>,    // fade, points drawn one by one before every other is skipped, ink gain (1 on dark grounds), tail power
     p2: vec4<f32>,    // camera distance, view units per pixel at depth 1, target height px, stride / spacing of this pass
     st: vec4<f32>,    // light's say in the tone (0..1), depth of field (px of blur per unit of depth), dissolve age, scatter
     st2: vec4<f32>,   // sparkle share, focus offset, dot mode (0 dust, 1 halftone, 2 dissolve), opacity
@@ -52,6 +52,14 @@ fn paper(xy: vec2<f32>, k: f32) -> f32 {
 fn drag(xy: vec2<f32>) -> f32 {
     if (u.acc.w <= 0.0) { return 1.0; }
     return mix(1.0, 0.5 + 0.75 * paper(xy, u.p2.z / 2000.0), u.acc.w);
+}
+
+// Dark ink on a light ground: blending happens in linear light, where a mark that half covers a pixel of white paper
+// still leaves it looking four fifths white, so thin dark marks all but vanish (thin light marks on a dark ground
+// have the opposite luck). On light grounds coverage is therefore strengthened, as if the mark were laid `k` times.
+fn ink(a: f32, k: f32) -> f32 {
+    if (k <= 1.0) { return a; }
+    return 1.0 - pow(max(1.0 - a, 0.0), k);
 }
 
 // the dark gaps between the lines of a picture tube, two logical pixels apart
@@ -207,7 +215,7 @@ fn vs_cross(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) ->
 fn fs_line(i: VOut) -> @location(0) vec4<f32> {
     // a line of half width r under a box of half width b: full where the box fits inside, a ramp across the edge
     let cov = clamp((i.d.y + i.d.z - abs(i.d.x)) / (2.0 * i.d.z), 0.0, min(1.0, i.d.y / i.d.z));
-    let a = cov * i.col.a * scan(i.pos.y) * drag(i.pos.xy);
+    let a = ink(cov * i.col.a * scan(i.pos.y) * drag(i.pos.xy), u.p1.z);
     return vec4<f32>(i.col.rgb * a, a);
 }
 
@@ -371,7 +379,8 @@ fn fs_dot(i: DOut) -> @location(0) vec4<f32> {
         // a disc of radius r under a blur of radius b: the same ramp as a line, with the light spread over the area
         cov = clamp((r + b - d) / (2.0 * b), 0.0, 1.0) * min(1.0, (r * r) / (b * b));
     }
-    let a = min(cov * i.col.a, 1.0) * scan(i.pos.y) * mix(1.0, drag(i.pos.xy), step(i.rb.z, 0.5));
+    // (grains get the full strengthening; the soft discs and lights less, or they would turn into blots)
+    let a = ink(min(cov * i.col.a, 1.0) * scan(i.pos.y) * mix(1.0, drag(i.pos.xy), step(i.rb.z, 0.5)), mix(u.p1.z, 1.0 + 0.16 * (u.p1.z - 1.0), step(0.5, i.rb.z)));
     return vec4<f32>(i.col.rgb * a, a);
 }
 
